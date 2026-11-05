@@ -156,6 +156,7 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       PUID: ${PUID:-1026}
       PGID: ${PGID:-100}
+      UMASK: "002"
       WEBUI_PORT: 8181
       TORRENTING_PORT: 6881
     healthcheck:
@@ -192,9 +193,6 @@ services:
     volumes:
       - /volume1/docker/plexhw:/config:rw
       - /volume1/mediarr:/data:rw
-      - /volume1/mediarr/media/movies:/data/media/movies:rw
-      - /volume1/mediarr/media/tv:/data/media/tv:rw
-      - /volume1/mediarr/media/anime:/data/media/anime:rw
       - /volume1/video/movies:/movies:ro
       - /volume1/video/tv_shows:/tv_shows:ro
       - /volume1/video/music:/music:ro
@@ -202,6 +200,7 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       PUID: ${PUID:-1026}
       PGID: ${PGID:-100}
+      UMASK: "002"
       VERSION: docker
       PLEX_CLAIM: "${PLEX_CLAIM:-}"
     healthcheck:
@@ -281,6 +280,7 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       PUID: ${PUID:-1026}
       PGID: ${PGID:-100}
+      UMASK: "002"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9696/ping >/dev/null || exit 1"]
       interval: 30s
@@ -354,6 +354,7 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       PUID: ${PUID:-1026}
       PGID: ${PGID:-100}
+      UMASK: "002"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8989/ping >/dev/null || exit 1"]
       interval: 30s
@@ -395,6 +396,7 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       PUID: ${PUID:-1026}
       PGID: ${PGID:-100}
+      UMASK: "002"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7878/ping >/dev/null || exit 1"]
       interval: 30s
@@ -433,6 +435,7 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       PUID: ${PUID:-1026}
       PGID: ${PGID:-100}
+      UMASK: "002"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6767/ping >/dev/null 2>&1 || curl -fsS http://127.0.0.1:6767 >/dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -501,6 +504,8 @@ services:
     environment:
       TZ: ${TZ:-Asia/Seoul}
       UN_CONFIG_FILEPATH: /config/unpackerr.conf
+      UN_FILE_MODE: "0664"
+      UN_DIR_MODE: "0775"
     restart: on-failure:5
     logging: *default-logging
 
@@ -534,6 +539,7 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       PUID: ${PUID:-1026}
       PGID: ${PGID:-100}
+      UMASK: "002"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8181/status >/dev/null || exit 1"]
       interval: 30s

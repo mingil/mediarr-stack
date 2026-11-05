@@ -1,5 +1,6 @@
-"""Zero-Touch REST API & Config Auto-Wirer for Sonarr, Radarr, Prowlarr, Bazarr, and qBittorrent."""
+"""Zero-Touch REST API & Config Auto-Wirer for Sonarr, Radarr, Prowlarr, Seerr, Bazarr, and qBittorrent."""
 
+import configparser
 import json
 import os
 from pathlib import Path
@@ -53,33 +54,23 @@ TRASH_MEDIA_MANAGEMENT_COMMON = {
     "importExtraFiles": True,
     "extraFileExtensions": "srt,smi,ass,sub,idx",
     "enableMediaInfo": True,
+    "setPermissionsLinux": False,  # Synology ACL 보존 권장 (UMASK 002 및 1026:100으로 권한 자동 일원화)
 }
 
 
-def _set_schema_fields(fields: List[Dict[str, Any]], updates: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Update field values in a Sonarr/Radarr/Prowlarr schema fields array."""
-    updated_names = set()
-    for field in fields:
-        fname = field.get("name")
-        if fname in updates:
-            field["value"] = updates[fname]
-            updated_names.add(fname)
-    for k, v in updates.items():
-        if k not in updated_names:
-            fields.append({"name": k, "value": v})
-    return fields
-
-
-def provision_qbittorrent_categories(docker_root: Path, puid: int = 1026, pgid: int = 100) -> str:
-    """Ensure qBittorrent categories (movies, tv, anime, music) point to /data/torrents/<cat>."""
-    cat_dir = docker_root / "qbittorrent/qBittorrent/config"
+def provision_qbittorrent_categories_and_conf(docker_root: Path, puid: int = 1026, pgid: int = 100) -> str:
+    """Configure qBittorrent categories.json AND qBittorrent.conf (SavePath=/data/torrents & Docker subnet auth bypass)."""
     if not docker_root.exists():
-        return "호스트 마운트 대기 중 (qBittorrent 카테고리 스킵)"
+        return "호스트 마운트 대기 중 (qBittorrent 설정 스킵)"
 
+    qbit_cfg_dir = docker_root / "qbittorrent/qBittorrent"
+    cat_dir = qbit_cfg_dir / "config"
     cat_dir.mkdir(parents=True, exist_ok=True)
+    _safe_chown_chmod(qbit_cfg_dir, puid, pgid, is_dir=True)
     _safe_chown_chmod(cat_dir, puid, pgid, is_dir=True)
-    cat_file = cat_dir / "categories.json"
 
+    # 1. categories.json
+    cat_file = cat_dir / "categories.json"
     existing: Dict[str, Any] = {}
     if cat_file.exists():
         try:
@@ -100,7 +91,38 @@ def provision_qbittorrent_categories(docker_root: Path, puid: int = 1026, pgid: 
 
     cat_file.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
     _safe_chown_chmod(cat_file, puid, pgid, is_dir=False)
-    return "qBittorrent 하드링크 카테고리(movies, tv, anime, music) 자동 생성 완료"
+
+    # 2. qBittorrent.conf (Ensure /data/torrents save path & internal Docker subnet auth whitelist)
+    conf_file = qbit_cfg_dir / "qBittorrent.conf"
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str  # preserve case
+    if conf_file.exists():
+        try:
+            parser.read(conf_file, encoding="utf-8")
+        except Exception:
+            pass
+
+    if "Preferences" not in parser:
+        parser["Preferences"] = {}
+    prefs = parser["Preferences"]
+    prefs.setdefault(r"Downloads\SavePath", "/data/torrents/")
+    prefs[r"WebUI\LocalHostAuth"] = "false"
+    prefs[r"WebUI\AuthSubnetWhitelistEnabled"] = "true"
+    prefs[r"WebUI\AuthSubnetWhitelist"] = "172.16.0.0/12, 192.168.0.0/16, 10.0.0.0/8, 127.0.0.1/32"
+
+    if "BitTorrent" not in parser:
+        parser["BitTorrent"] = {}
+    bt = parser["BitTorrent"]
+    bt.setdefault(r"Session\DefaultSavePath", "/data/torrents")
+
+    with open(conf_file, "w", encoding="utf-8") as f:
+        parser.write(f, space_around_delimiters=False)
+    _safe_chown_chmod(conf_file, puid, pgid, is_dir=False)
+
+    return "qBittorrent: 기본 저장경로(/data/torrents), 카테고리 5종, 내부 도커 서브넷 무인증 연동 설정 완료"
+
+
+provision_qbittorrent_categories = provision_qbittorrent_categories_and_conf
 
 
 def provision_bazarr_config(
@@ -132,6 +154,9 @@ def provision_bazarr_config(
     general["use_sonarr"] = True
     general["use_radarr"] = True
     general["auto_update"] = False
+    general["serie_default_enabled"] = True
+    general["movie_default_enabled"] = True
+    general.setdefault("enabled_providers", ["yify", "subdl", "podnapisi", "gestdown", "animetosho"])
 
     sonarr_sec = data.setdefault("sonarr", {})
     sonarr_sec["ip"] = "sonarr"
@@ -156,7 +181,104 @@ def provision_bazarr_config(
 
     cfg_file.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
     _safe_chown_chmod(cfg_file, puid, pgid, is_dir=False)
-    return "Bazarr 한국어 자막 자동화(Sonarr·Radarr 연동 및 AI Subsync 오디오 싱크 보정) 설정 완료"
+    return "Bazarr: 한국어·영어 자막 공급자 활성화, Sonarr·Radarr 연동 및 AI Subsync 오디오 싱크 보정 설정 완료"
+
+
+def provision_seerr_settings(
+    docker_root: Path,
+    nas_ip: str,
+    sonarr_api_key: str,
+    radarr_api_key: str,
+    puid: int = 1026,
+    pgid: int = 100,
+) -> str:
+    """Automatically pre-wire Sonarr, Radarr, and Plex server endpoints into Seerr (settings.json)."""
+    if not docker_root.exists():
+        return "호스트 마운트 대기 중 (Seerr 설정 스킵)"
+
+    seerr_dir = docker_root / "seerr"
+    seerr_dir.mkdir(parents=True, exist_ok=True)
+    _safe_chown_chmod(seerr_dir, puid, pgid, is_dir=True)
+    settings_file = seerr_dir / "settings.json"
+
+    data: Dict[str, Any] = {}
+    if settings_file.exists():
+        try:
+            data = json.loads(settings_file.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+
+    plex_sec = data.setdefault("plex", {})
+    plex_sec.setdefault("name", "Plex Media Server")
+    plex_sec.setdefault("ip", nas_ip)
+    plex_sec.setdefault("port", 32400)
+    plex_sec.setdefault("useSsl", False)
+
+    if radarr_api_key:
+        radarr_list = data.setdefault("radarr", [])
+        if not radarr_list:
+            radarr_list.append(
+                {
+                    "id": 1,
+                    "name": "Radarr (Movies)",
+                    "hostname": "radarr",
+                    "port": 7878,
+                    "apiKey": radarr_api_key,
+                    "useSsl": False,
+                    "baseUrl": "",
+                    "activeProfileId": 1,
+                    "activeProfileName": "Any",
+                    "activeDirectory": "/data/media/movies",
+                    "is4k": False,
+                    "minimumAvailability": "released",
+                    "isDefault": True,
+                    "externalUrl": f"http://{nas_ip}:7878",
+                    "syncEnabled": True,
+                    "preventSearch": False,
+                }
+            )
+        else:
+            radarr_list[0]["apiKey"] = radarr_api_key
+            radarr_list[0]["hostname"] = "radarr"
+            radarr_list[0]["activeDirectory"] = "/data/media/movies"
+
+    if sonarr_api_key:
+        sonarr_list = data.setdefault("sonarr", [])
+        if not sonarr_list:
+            sonarr_list.append(
+                {
+                    "id": 1,
+                    "name": "Sonarr (TV & Anime)",
+                    "hostname": "sonarr",
+                    "port": 8989,
+                    "apiKey": sonarr_api_key,
+                    "useSsl": False,
+                    "baseUrl": "",
+                    "activeProfileId": 1,
+                    "activeProfileName": "Any",
+                    "activeDirectory": "/data/media/tv",
+                    "activeAnimeProfileId": 1,
+                    "activeAnimeProfileName": "Any",
+                    "activeAnimeDirectory": "/data/media/anime",
+                    "enableSeasonFolders": True,
+                    "is4k": False,
+                    "isDefault": True,
+                    "externalUrl": f"http://{nas_ip}:8989",
+                    "syncEnabled": True,
+                    "preventSearch": False,
+                }
+            )
+        else:
+            sonarr_list[0]["apiKey"] = sonarr_api_key
+            sonarr_list[0]["hostname"] = "sonarr"
+            sonarr_list[0]["activeDirectory"] = "/data/media/tv"
+            sonarr_list[0]["activeAnimeDirectory"] = "/data/media/anime"
+
+    if settings_file.exists() or sonarr_api_key or radarr_api_key:
+        settings_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        _safe_chown_chmod(settings_file, puid, pgid, is_dir=False)
+
+    return "Seerr: Plex 주소 및 Sonarr(/data/media/tv, anime)·Radarr(/data/media/movies) 서버 자동 연동 완료"
 
 
 async def configure_sonarr_via_api(
@@ -172,7 +294,6 @@ async def configure_sonarr_via_api(
     logs: List[str] = []
     headers = {"X-Api-Key": api_key}
 
-    # 1. Naming Config
     r_nam = await client.get(f"{base_url}/api/v3/config/naming", headers=headers)
     if r_nam.status_code == 200:
         nam_data = r_nam.json()
@@ -180,7 +301,6 @@ async def configure_sonarr_via_api(
         await client.put(f"{base_url}/api/v3/config/naming", headers=headers, json=nam_data)
         logs.append("Sonarr: TRaSH Guides 표준 에피소드·애니·시즌 폴더 네이밍 포맷 자동 적용")
 
-    # 2. Media Management Config (Hardlinks & Extra Subtitle Files)
     r_mm = await client.get(f"{base_url}/api/v3/config/mediamanagement", headers=headers)
     if r_mm.status_code == 200:
         mm_data = r_mm.json()
@@ -189,7 +309,6 @@ async def configure_sonarr_via_api(
         await client.put(f"{base_url}/api/v3/config/mediamanagement", headers=headers, json=mm_data)
         logs.append("Sonarr: 0.1초 하드링크(copyUsingHardlinks) 및 자막(.srt/.smi) 동시 임포트 활성화")
 
-    # 3. Root Folders (/data/media/tv & /data/media/anime)
     r_rf = await client.get(f"{base_url}/api/v3/rootfolder", headers=headers)
     if r_rf.status_code == 200:
         existing_paths = {item.get("path", "").rstrip("/") for item in r_rf.json()}
@@ -198,7 +317,6 @@ async def configure_sonarr_via_api(
                 await client.post(f"{base_url}/api/v3/rootfolder", headers=headers, json={"path": target_path})
                 logs.append(f"Sonarr: 루트 폴더({target_path}) 자동 등록")
 
-    # 4. Download Client (qBittorrent)
     r_dc = await client.get(f"{base_url}/api/v3/downloadclient", headers=headers)
     if r_dc.status_code == 200:
         existing_dcs = r_dc.json()
@@ -240,7 +358,6 @@ async def configure_radarr_via_api(
     logs: List[str] = []
     headers = {"X-Api-Key": api_key}
 
-    # 1. Naming Config
     r_nam = await client.get(f"{base_url}/api/v3/config/naming", headers=headers)
     if r_nam.status_code == 200:
         nam_data = r_nam.json()
@@ -248,7 +365,6 @@ async def configure_radarr_via_api(
         await client.put(f"{base_url}/api/v3/config/naming", headers=headers, json=nam_data)
         logs.append("Radarr: TRaSH Guides + Plex 표준 영화 폴더·파일({tmdb-{TmdbId}}) 네이밍 포맷 자동 적용")
 
-    # 2. Media Management Config (Hardlinks & Extra Subtitle Files)
     r_mm = await client.get(f"{base_url}/api/v3/config/mediamanagement", headers=headers)
     if r_mm.status_code == 200:
         mm_data = r_mm.json()
@@ -257,7 +373,6 @@ async def configure_radarr_via_api(
         await client.put(f"{base_url}/api/v3/config/mediamanagement", headers=headers, json=mm_data)
         logs.append("Radarr: 0.1초 하드링크(copyUsingHardlinks) 및 자막(.srt/.smi) 동시 임포트 활성화")
 
-    # 3. Root Folder (/data/media/movies)
     r_rf = await client.get(f"{base_url}/api/v3/rootfolder", headers=headers)
     if r_rf.status_code == 200:
         existing_paths = {item.get("path", "").rstrip("/") for item in r_rf.json()}
@@ -265,7 +380,6 @@ async def configure_radarr_via_api(
             await client.post(f"{base_url}/api/v3/rootfolder", headers=headers, json={"path": "/data/media/movies"})
             logs.append("Radarr: 루트 폴더(/data/media/movies) 자동 등록")
 
-    # 4. Download Client (qBittorrent)
     r_dc = await client.get(f"{base_url}/api/v3/downloadclient", headers=headers)
     if r_dc.status_code == 200:
         existing_dcs = r_dc.json()
@@ -301,7 +415,7 @@ async def configure_prowlarr_via_api(
     sonarr_api_key: str = "",
     radarr_api_key: str = "",
 ) -> List[str]:
-    """Configure Prowlarr v1 FlareSolverr Indexer Proxy and Sonarr/Radarr Full-Sync Application links."""
+    """Configure Prowlarr v1 FlareSolverr Proxy, Sonarr/Radarr Full-Sync Apps, and default public indexers."""
     logs: List[str] = []
     headers = {"X-Api-Key": prowlarr_api_key}
 
@@ -370,6 +484,27 @@ async def configure_prowlarr_via_api(
             await client.post(f"{base_url}/api/v1/applications", headers=headers, json=radarr_app)
             logs.append("Prowlarr: Radarr(http://radarr:7878) 인덱서 실시간 Full Sync 자동 연결")
 
+    # 4. Auto-register starter public indexers if Prowlarr currently has 0 indexers
+    r_idx = await client.get(f"{base_url}/api/v1/indexer", headers=headers)
+    if r_idx.status_code == 200 and len(r_idx.json()) == 0:
+        r_schema = await client.get(f"{base_url}/api/v1/indexer/schema", headers=headers)
+        if r_schema.status_code == 200:
+            schemas = r_schema.json()
+            starter_targets = {"limetorrents", "eztv", "yts", "nyaasi", "thepiratebay", "1337x", "tokyotoshokan"}
+            added_count = 0
+            for item in schemas:
+                defn = str(item.get("definitionName", "")).lower()
+                if defn in starter_targets and item.get("privacy") == "public":
+                    item["enable"] = True
+                    item["appProfileId"] = 1
+                    item["priority"] = 25
+                    item["tags"] = [tag_id]
+                    res_post = await client.post(f"{base_url}/api/v1/indexer", headers=headers, json=item)
+                    if res_post.status_code in (200, 201):
+                        added_count += 1
+            if added_count > 0:
+                logs.append(f"Prowlarr: 기본 공개 인덱서 {added_count}종 자동 등록 및 Sonarr·Radarr 동기화 완료")
+
     return logs
 
 
@@ -379,11 +514,12 @@ async def auto_wire_all_services(
     radarr_url: str = "http://radarr:7878",
     prowlarr_url: str = "http://prowlarr:9696",
 ) -> Dict[str, Any]:
-    """Master Zero-Touch Auto-Wirer: configures files and calls Sonarr/Radarr/Prowlarr APIs automatically."""
+    """Master Zero-Touch Auto-Wirer: configures files and calls Sonarr/Radarr/Prowlarr/Seerr APIs automatically."""
     mounts = get_mount_paths()
     d_root = docker_root or mounts["docker"]
     puid = int(os.environ.get("PUID", "1026"))
     pgid = int(os.environ.get("PGID", "100"))
+    nas_ip = os.environ.get("NAS_IP", "192.168.0.100")
     qbit_port = int(os.environ.get("QBIT_WEBUI_PORT", "8181"))
     qbit_user = os.environ.get("QBIT_USER", "admin")
     qbit_pass = os.environ.get("QBIT_PASSWORD", "")
@@ -391,12 +527,22 @@ async def auto_wire_all_services(
     creds = discover_credentials(d_root)
     completed_actions: List[str] = []
 
-    # 1. File-based auto-provisioning (qBittorrent categories & Bazarr config.yaml)
+    # 1. File-based auto-provisioning (qBittorrent conf/categories, Bazarr config.yaml, Seerr settings.json)
     if d_root.exists():
-        completed_actions.append(provision_qbittorrent_categories(d_root, puid, pgid))
+        completed_actions.append(provision_qbittorrent_categories_and_conf(d_root, puid, pgid))
         completed_actions.append(
             provision_bazarr_config(
                 d_root,
+                sonarr_api_key=creds["sonarr_api_key"],
+                radarr_api_key=creds["radarr_api_key"],
+                puid=puid,
+                pgid=pgid,
+            )
+        )
+        completed_actions.append(
+            provision_seerr_settings(
+                d_root,
+                nas_ip=nas_ip,
                 sonarr_api_key=creds["sonarr_api_key"],
                 radarr_api_key=creds["radarr_api_key"],
                 puid=puid,

@@ -46,23 +46,29 @@ LEGACY_DIR = BASE_DIR / "legacy-backup"
 
 
 async def _periodic_maintenance_loop(interval_hours: float) -> None:
-    """Background loop inside mediarr-control-center: auto-wires Sonarr/Radarr/Prowlarr/Bazarr/qBittorrent after boot, then runs 24h DB optimization."""
-    # Run initial passes at 45s and 120s after boot to auto-wire all services once containers finish booting
-    for initial_delay in (45.0, 75.0):
-        await asyncio.sleep(initial_delay)
+    """Background loop inside mediarr-control-center: continuously auto-wires services after boot, and runs 24h DB optimization."""
+    # Phase 1: First 10 minutes after boot — run every 30s so newly pulled/booted containers are wired immediately
+    for _ in range(20):
+        await asyncio.sleep(30.0)
         try:
             await asyncio.to_thread(bootstrap_host_environment)
             await auto_wire_all_services()
         except Exception:
             pass
 
-    sleep_seconds = max(3600.0, interval_hours * 3600.0)
+    # Phase 2: Steady state — check auto-wiring every 10 minutes, run SQLite VACUUM & backup every interval_hours
+    wire_interval = 600.0
+    maint_interval = max(3600.0, interval_hours * 3600.0)
+    elapsed_since_maint = 0.0
     while True:
-        await asyncio.sleep(sleep_seconds)
+        await asyncio.sleep(wire_interval)
+        elapsed_since_maint += wire_interval
         try:
             await asyncio.to_thread(bootstrap_host_environment)
             await auto_wire_all_services()
-            await asyncio.to_thread(run_sqlite_maintenance_and_backup)
+            if elapsed_since_maint >= maint_interval:
+                await asyncio.to_thread(run_sqlite_maintenance_and_backup)
+                elapsed_since_maint = 0.0
         except Exception:
             pass
 

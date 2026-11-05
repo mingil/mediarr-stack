@@ -38,6 +38,25 @@ def _safe_chown_chmod(target: Path, puid: int = 1026, pgid: int = 100, is_dir: b
         pass
 
 
+def _safe_chown_chmod_tree(root_dir: Path, puid: int = 1026, pgid: int = 100, max_depth: int = 3) -> None:
+    """Recursively heal root:root ownership on config/media folders created by Docker daemon or DSM File Station."""
+    if not root_dir.exists():
+        return
+    _safe_chown_chmod(root_dir, puid, pgid, is_dir=True)
+    try:
+        base_parts = len(root_dir.parts)
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            cur_path = Path(dirpath)
+            if len(cur_path.parts) - base_parts >= max_depth:
+                dirnames.clear()
+            for dname in dirnames:
+                _safe_chown_chmod(cur_path / dname, puid, pgid, is_dir=True)
+            for fname in filenames:
+                _safe_chown_chmod(cur_path / fname, puid, pgid, is_dir=False)
+    except Exception:
+        pass
+
+
 def clean_stale_pid_files(search_roots: List[Path]) -> List[str]:
     """Remove stale plexmediaserver.pid or lock files that prevent container startup."""
     removed: List[str] = []
@@ -152,11 +171,15 @@ def bootstrap_host_environment(
         "_backups/mediarr-stack",
     ]
     if d_root.exists():
+        non_root_strict_dirs = {"seerr", "recyclarr", "unpackerr", "kometa", "maintainerr", "bazarr", "qbittorrent", "gluetun"}
         for sub in config_subdirs:
             target_dir = d_root / sub
             target_dir.mkdir(parents=True, exist_ok=True)
-            _safe_chown_chmod(target_dir, puid, pgid, is_dir=True)
-        actions.append(f"도커 설정 폴더 {len(config_subdirs)}개 생성 및 권한({puid}:{pgid}) 설정 완료")
+            if sub in non_root_strict_dirs:
+                _safe_chown_chmod_tree(target_dir, puid, pgid, max_depth=3)
+            else:
+                _safe_chown_chmod(target_dir, puid, pgid, is_dir=True)
+        actions.append(f"도커 설정 폴더 {len(config_subdirs)}개 생성 및 하위 권한({puid}:{pgid}, 775/664) 자동 보정 완료")
 
         # 2. Auto-restore 6.7GB plexhw/Library if user moved plexhw into mediarr-stack/plexhw
         target_plex_lib = d_root / "plexhw/Library"
@@ -169,6 +192,10 @@ def bootstrap_host_environment(
                 if src_lib.exists() and src_lib.is_dir():
                     try:
                         shutil.move(str(src_lib), str(target_plex_lib))
+                        try:
+                            src_lib.parent.rmdir()
+                        except Exception:
+                            pass
                         actions.append(f"기존 6.7GB Plex Library를 표준 경로({target_plex_lib})로 0.01초 무손실 복원 완료")
                         break
                     except Exception:
@@ -212,6 +239,37 @@ def bootstrap_host_environment(
             kometa_yml_path.write_text(kometa_content, encoding="utf-8")
             _safe_chown_chmod(kometa_yml_path, puid, pgid, is_dir=False)
             actions.append("Kometa 포스터 배지 설정(kometa/config.yml) 생성 및 Plex 토큰 자동 연동 완료")
+
+        # Pre-provision qBittorrent, Bazarr, and Seerr config files BEFORE dependent containers start
+        try:
+            from app.auto_wirer import (
+                provision_bazarr_config,
+                provision_qbittorrent_categories_and_conf,
+                provision_seerr_settings,
+            )
+
+            actions.append(provision_qbittorrent_categories_and_conf(d_root, puid, pgid))
+            actions.append(
+                provision_bazarr_config(
+                    d_root,
+                    sonarr_api_key=creds["sonarr_api_key"],
+                    radarr_api_key=creds["radarr_api_key"],
+                    puid=puid,
+                    pgid=pgid,
+                )
+            )
+            actions.append(
+                provision_seerr_settings(
+                    d_root,
+                    nas_ip=os.environ.get("NAS_IP", "192.168.0.100"),
+                    sonarr_api_key=creds["sonarr_api_key"],
+                    radarr_api_key=creds["radarr_api_key"],
+                    puid=puid,
+                    pgid=pgid,
+                )
+            )
+        except Exception:
+            pass
 
     # 4. Create TRaSH Guides unified hardlink directory tree (/data/torrents & /data/media) with 1026:100 ownership
     media_subdirs = [

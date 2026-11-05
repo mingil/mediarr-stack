@@ -18,7 +18,8 @@ from app.auto_wirer import (
     configure_radarr_via_api,
     configure_sonarr_via_api,
     provision_bazarr_config,
-    provision_qbittorrent_categories,
+    provision_qbittorrent_categories_and_conf,
+    provision_seerr_settings,
 )
 from app.runtime_manager import (
     bootstrap_host_environment,
@@ -202,13 +203,16 @@ def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
     docker_root = tmp_path / "docker"
     docker_root.mkdir()
 
-    # 1. Test qBittorrent categories.json & Bazarr config.yaml auto-provisioning
-    qbit_msg = provision_qbittorrent_categories(docker_root)
-    assert "자동 생성 완료" in qbit_msg
+    # 1. Test qBittorrent categories.json + qBittorrent.conf, Bazarr config.yaml & Seerr settings.json
+    qbit_msg = provision_qbittorrent_categories_and_conf(docker_root)
+    assert "설정 완료" in qbit_msg
     cats = json.loads((docker_root / "qbittorrent/qBittorrent/config/categories.json").read_text(encoding="utf-8"))
     assert cats["movies"]["save_path"] == "/data/torrents/movies"
     assert cats["tv"]["save_path"] == "/data/torrents/tv"
     assert cats["anime"]["save_path"] == "/data/torrents/anime"
+    qbit_conf = (docker_root / "qbittorrent/qBittorrent/qBittorrent.conf").read_text(encoding="utf-8")
+    assert "AuthSubnetWhitelistEnabled=true" in qbit_conf
+    assert "/data/torrents" in qbit_conf
 
     baz_msg = provision_bazarr_config(docker_root, sonarr_api_key="S_KEY_1", radarr_api_key="R_KEY_2")
     assert "설정 완료" in baz_msg
@@ -216,6 +220,18 @@ def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
     assert baz_cfg["sonarr"]["apikey"] == "S_KEY_1"
     assert baz_cfg["radarr"]["apikey"] == "R_KEY_2"
     assert baz_cfg["subsync"]["use_subsync"] is True
+
+    seerr_msg = provision_seerr_settings(
+        docker_root, nas_ip="192.168.0.100", sonarr_api_key="S_KEY_1", radarr_api_key="R_KEY_2"
+    )
+    assert "자동 연동 완료" in seerr_msg
+    seerr_cfg = json.loads((docker_root / "seerr/settings.json").read_text(encoding="utf-8"))
+    assert seerr_cfg["plex"]["ip"] == "192.168.0.100"
+    assert seerr_cfg["radarr"][0]["apiKey"] == "R_KEY_2"
+    assert seerr_cfg["radarr"][0]["activeDirectory"] == "/data/media/movies"
+    assert seerr_cfg["sonarr"][0]["apiKey"] == "S_KEY_1"
+    assert seerr_cfg["sonarr"][0]["activeDirectory"] == "/data/media/tv"
+    assert seerr_cfg["sonarr"][0]["activeAnimeDirectory"] == "/data/media/anime"
 
     # 2. Test Sonarr, Radarr, Prowlarr REST API auto-configuration via MockTransport
     recorded_requests = []
@@ -226,6 +242,15 @@ def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
         if request.method == "GET":
             if path.endswith("/config/naming") or path.endswith("/config/mediamanagement"):
                 return httpx.Response(200, json={"id": 1})
+            if path.endswith("/indexer/schema"):
+                return httpx.Response(
+                    200,
+                    json=[
+                        {"definitionName": "yts", "privacy": "public", "name": "YTS"},
+                        {"definitionName": "nyaasi", "privacy": "public", "name": "Nyaa.si"},
+                        {"definitionName": "eztv", "privacy": "public", "name": "EZTV"},
+                    ],
+                )
             return httpx.Response(200, json=[])
         return httpx.Response(201, json={"id": 1})
 
@@ -242,7 +267,7 @@ def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
     s_logs, r_logs, p_logs = asyncio.run(_run_api_tests())
     assert len(s_logs) == 5  # Naming, MediaManagement, 2 RootFolders (/tv, /anime), qBittorrent
     assert len(r_logs) == 4  # Naming, MediaManagement, 1 RootFolder (/movies), qBittorrent
-    assert len(p_logs) == 3  # FlareSolverr Proxy, Sonarr FullSync, Radarr FullSync
+    assert len(p_logs) == 4  # FlareSolverr Proxy, Sonarr FullSync, Radarr FullSync, Starter Indexers
     assert "{tvdb-{TvdbId}}" in TRASH_SONARR_NAMING["seriesFolderFormat"]
     assert "{tmdb-{TmdbId}}" in TRASH_RADARR_NAMING["movieFolderFormat"]
 

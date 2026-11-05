@@ -9,5 +9,7 @@ venv/
 # 기존 업로드된 대용량 Plex Library(6.7GB) 및 민감 키 포함 원본 폴더는 Git 추적에서 제외
 plexhw/
 qbittorrent_gluetun/
+legacy-backup/qbittorrent_gluetun/
+legacy-backup/plexhw-compose.yaml
 @eaDir/
 *.log
