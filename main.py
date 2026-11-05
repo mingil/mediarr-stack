@@ -1,8 +1,10 @@
 """FastAPI Backend for the Unified Media & *Arr Automation Stack Control Center (mediarr-stack)."""
 
 import asyncio
+import base64
 import io
 import os
+import secrets
 import zipfile
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -10,7 +12,7 @@ from typing import Any, Dict, List
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -112,6 +114,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def basic_auth_middleware(request: Request, call_next):
+    """Optional HTTP Basic Auth protection when CONTROL_CENTER_PASSWORD is set in .env."""
+    expected_pass = os.environ.get("CONTROL_CENTER_PASSWORD", "").strip()
+    if not expected_pass or request.url.path == "/api/health":
+        return await call_next(request)
+
+    expected_user = os.environ.get("CONTROL_CENTER_USER", "admin").strip() or "admin"
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+            user, _, pwd = decoded.partition(":")
+            if secrets.compare_digest(user, expected_user) and secrets.compare_digest(pwd, expected_pass):
+                return await call_next(request)
+        except Exception:
+            pass
+
+    return Response(
+        content="Mediarr Control Center: 관리자 로그인이 필요합니다.",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="Mediarr Control Center"'},
+    )
 
 
 class ProbeRequest(BaseModel):

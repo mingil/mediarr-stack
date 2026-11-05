@@ -314,3 +314,19 @@ def test_smi2srt_korean_encoding_and_backup_engine(tmp_path: Path):
     backed_up_smi = docker_root / "smi2srt/smi_backup/media/movies/Oldboy (2003)/Oldboy.2003.1080p.smi"
     assert backed_up_smi.exists()
 
+
+def test_control_center_basic_auth_protection(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CONTROL_CENTER_USER", "director")
+    monkeypatch.setenv("CONTROL_CENTER_PASSWORD", "secret123")
+
+    # /api/health must remain open for Docker healthchecks
+    assert client.get("/api/health").status_code == 200
+
+    # Protected endpoints must require Basic Auth
+    unauth = client.get("/api/diagnosis")
+    assert unauth.status_code == 401
+
+    auth_ok = client.get("/api/diagnosis", auth=("director", "secret123"))
+    assert auth_ok.status_code == 200
+
+

@@ -169,6 +169,8 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "      SONARR_API_KEY: ${SONARR_API_KEY:-}",
             "      RADARR_API_KEY: ${RADARR_API_KEY:-}",
             "      TMDB_API_KEY: ${TMDB_API_KEY:-}",
+            "      CONTROL_CENTER_USER: ${CONTROL_CENTER_USER:-admin}",
+            "      CONTROL_CENTER_PASSWORD: ${CONTROL_CENTER_PASSWORD:-}",
             "    ports:",
             '      - "8585:8500"',
             "    volumes:",
