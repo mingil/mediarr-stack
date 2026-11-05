@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+.git
+.github
+.pytest_cache
+.env
+tests
+plexhw
+qbittorrent_gluetun
+legacy-backup
+@eaDir
+*.log

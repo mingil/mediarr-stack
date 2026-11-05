@@ -1,0 +1,496 @@
+# =============================================================================
+# 🎬 ULTIMATE SYNOLOGY MEDIA & *ARR AUTOMATION STACK (mediarr-stack)
+# =============================================================================
+# • 프로젝트명   : mediarr-stack (단일 프로젝트 & 단일 docker-compose.yml 통합 아키텍처)
+# • 통합 이미지  : kimmingil/mediarr-stack:latest (자동 초기화 · 실시간 관제 · DB 최적화 내장)
+# • 하드링크 규격: TRaSH Guides 단일 볼륨(/volume1/mediarr:/data) 0.1초 하드링크 완벽 지원
+# • 기존 호환성  : 기존 PlexHW(/volume1/docker/plexhw) & qBittorrent(:8181) 설정 100% 무손실 승계
+# • 시놀로지 권한: PUID=1026 / PGID=100 / TZ=Asia/Seoul
+# =============================================================================
+
+version: "3.9"
+
+# 🌐 1. 도커 내부 유기적 통신용 전용 브리지 네트워크
+networks:
+  mediarr_net:
+    name: mediarr_net
+    driver: bridge
+
+# 🧹 2. 시놀로지 NAS 디스크 보호용 공통 로그 로테이션 설정
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ---------------------------------------------------------------------------
+  # 🎛️ 0. MEDIARR CONTROL CENTER - 통합 관제 · 폴더/설정 자동 초기화 · DB 닥터
+  # ---------------------------------------------------------------------------
+  mediarr-control-center:
+    image: kimmingil/mediarr-stack:latest
+    container_name: mediarr-control-center
+    hostname: mediarr-control-center
+    networks:
+      mediarr_net:
+        aliases:
+          - mediarr-control-center
+          - mediarr-stack
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+      PORT: 8500
+      AUTO_BOOTSTRAP: "true"
+      HOST_DOCKER_MOUNT: /host-docker
+      HOST_DATA_MOUNT: /host-data
+      NAS_IP: ${NAS_IP:-192.168.0.100}
+      SONARR_API_KEY: ${SONARR_API_KEY:-}
+      RADARR_API_KEY: ${RADARR_API_KEY:-}
+    ports:
+      - "8500:8500"
+    volumes:
+      - /volume1/docker:/host-docker:rw
+      - /volume1/mediarr:/host-data:rw
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8500/api/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # ⬇️ 2. QBITTORRENT - VPN 보호 초고속 토렌트 다운로더 (포트 8181 호환)
+  # ---------------------------------------------------------------------------
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: mediarr-qbittorrent
+    hostname: qbittorrent
+    networks:
+      mediarr_net:
+        aliases:
+          - qbittorrent
+          - mediarr-qbittorrent
+    ports:
+      - "8181:8181/tcp"
+      - "6881:6881/tcp"
+      - "6881:6881/udp"
+    mem_limit: 2g
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /volume1/docker/qbittorrent:/config:rw
+      - /volume1/mediarr:/data:rw
+      - /volume1/torrents:/downloads:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+      WEBUI_PORT: 8181
+      TORRENTING_PORT: 6881
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8181 >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 🍿 3. PLEX MEDIA SERVER - 4K QuickSync 하드웨어 가속 & RAM 트랜스코딩 서버
+  # ---------------------------------------------------------------------------
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: mediarr-plex
+    hostname: plex
+    network_mode: host
+    mem_limit: 4g
+    cpu_shares: 1024
+    security_opt:
+      - no-new-privileges:true
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/dri/card0:/dev/dri/card0
+    tmpfs:
+      - /transcode:size=2G,mode=1777
+    volumes:
+      - /volume1/docker/plexhw:/config:rw
+      - /volume1/mediarr:/data:rw
+      - /volume1/mediarr/media/movies:/data/media/movies:rw
+      - /volume1/mediarr/media/tv:/data/media/tv:rw
+      - /volume1/mediarr/media/anime:/data/media/anime:rw
+      - /volume1/video/movies:/movies:ro
+      - /volume1/video/tv_shows:/tv_shows:ro
+      - /volume1/video/music:/music:ro
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+      VERSION: docker
+      PLEX_CLAIM: "${PLEX_CLAIM:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:32400/identity >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 🎫 4. SEERR - 넷플릭스형 영화·드라마·애니 원클릭 검색 및 요청 포털
+  # ---------------------------------------------------------------------------
+  seerr:
+    image: ghcr.io/fallenbagel/jellyseerr:latest
+    container_name: mediarr-seerr
+    hostname: seerr
+    networks:
+      mediarr_net:
+        aliases:
+          - seerr
+          - jellyseerr
+          - overseerr
+          - mediarr-seerr
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "5055:5055/tcp"
+    volumes:
+      - /volume1/docker/seerr:/app/config:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+      LOG_LEVEL: info
+      PORT: 5055
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5055/api/v1/status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 📡 5. PROWLARR - 통합 토렌트 인덱서 컨트롤 타워 (Sonarr·Radarr 자동 동기화)
+  # ---------------------------------------------------------------------------
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: mediarr-prowlarr
+    hostname: prowlarr
+    networks:
+      mediarr_net:
+        aliases:
+          - prowlarr
+          - mediarr-prowlarr
+    ports:
+      - "9696:9696/tcp"
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /volume1/docker/prowlarr:/config:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9696/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 🛡️ 6. FLARESOLVERR - 인덱서 Cloudflare 보안 검증 백그라운드 자동 우회
+  # ---------------------------------------------------------------------------
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: mediarr-flaresolverr
+    hostname: flaresolverr
+    networks:
+      mediarr_net:
+        aliases:
+          - flaresolverr
+          - mediarr-flaresolverr
+    ports:
+      - "8191:8191/tcp"
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      LOG_LEVEL: info
+      LOG_HTML: "false"
+      CAPTCHA_SOLVER: none
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:8191/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 📺 7. SONARR - TV 드라마·예능·애니메이션 자동 수집 및 0.1초 하드링크 정리
+  # ---------------------------------------------------------------------------
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: mediarr-sonarr
+    hostname: sonarr
+    networks:
+      mediarr_net:
+        aliases:
+          - sonarr
+          - mediarr-sonarr
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "8989:8989/tcp"
+    volumes:
+      - /volume1/docker/sonarr:/config:rw
+      - /volume1/mediarr:/data:rw
+      - /volume1/torrents:/downloads:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8989/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 🎬 8. RADARR - 영화(4K/1080p) 자동 수집 및 화질 업그레이드 · 하드링크 정리
+  # ---------------------------------------------------------------------------
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: mediarr-radarr
+    hostname: radarr
+    networks:
+      mediarr_net:
+        aliases:
+          - radarr
+          - mediarr-radarr
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "7878:7878/tcp"
+    volumes:
+      - /volume1/docker/radarr:/config:rw
+      - /volume1/mediarr:/data:rw
+      - /volume1/torrents:/downloads:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7878/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 💬 9. BAZARR - 한국어(ko)·영어(en) 자막 자동 다운로드 & AI 오디오 싱크 보정
+  # ---------------------------------------------------------------------------
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: mediarr-bazarr
+    hostname: bazarr
+    networks:
+      mediarr_net:
+        aliases:
+          - bazarr
+          - mediarr-bazarr
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "6767:6767/tcp"
+    volumes:
+      - /volume1/docker/bazarr:/config:rw
+      - /volume1/mediarr:/data:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6767/ping >/dev/null 2>&1 || curl -fsS http://127.0.0.1:6767 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # ♻️ 10. RECYCLARR - TRaSH Guides 최고급 화질 프로필 & 한국어 우대 자동 동기화
+  # ---------------------------------------------------------------------------
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: mediarr-recyclarr
+    hostname: recyclarr
+    networks:
+      mediarr_net:
+        aliases:
+          - recyclarr
+          - mediarr-recyclarr
+    user: "1026:100"
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /volume1/docker/recyclarr:/config:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      CRON_SCHEDULE: "@daily"
+      SONARR_API_KEY: ${SONARR_API_KEY:-}
+      RADARR_API_KEY: ${RADARR_API_KEY:-}
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 📦 11. UNPACKERR - 토렌트 압축파일(.rar/.zip) 자동 해제 후 하드링크 연결
+  # ---------------------------------------------------------------------------
+  unpackerr:
+    image: golift/unpackerr:latest
+    container_name: mediarr-unpackerr
+    hostname: unpackerr
+    networks:
+      mediarr_net:
+        aliases:
+          - unpackerr
+          - mediarr-unpackerr
+    user: "1026:100"
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /volume1/docker/unpackerr:/config:rw
+      - /volume1/mediarr:/data:rw
+      - /volume1/torrents:/downloads:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      UN_SONARR_0_URL: http://sonarr:8989
+      UN_SONARR_0_API_KEY: ${SONARR_API_KEY:-}
+      UN_SONARR_0_PATHS_0: /data/torrents
+      UN_RADARR_0_URL: http://radarr:7878
+      UN_RADARR_0_API_KEY: ${RADARR_API_KEY:-}
+      UN_RADARR_0_PATHS_0: /data/torrents
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 📊 12. TAUTULLI - Plex 실시간 스트리밍·하드웨어 트랜스코딩 모니터링 (포트 8182)
+  # ---------------------------------------------------------------------------
+  tautulli:
+    image: lscr.io/linuxserver/tautulli:latest
+    container_name: mediarr-tautulli
+    hostname: tautulli
+    networks:
+      mediarr_net:
+        aliases:
+          - tautulli
+          - mediarr-tautulli
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "8182:8181/tcp"
+    volumes:
+      - /volume1/docker/tautulli:/config:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8181/status >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 🎨 13. KOMETA - Plex 포스터 4K·HDR·평점 배지 오버레이 및 스마트 컬렉션
+  # ---------------------------------------------------------------------------
+  kometa:
+    image: kometateam/kometa:latest
+    container_name: mediarr-kometa
+    hostname: kometa
+    networks:
+      mediarr_net:
+        aliases:
+          - kometa
+          - mediarr-kometa
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    user: "1026:100"
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /volume1/docker/kometa:/config:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      KOMETA_TIME: "04:00"
+      KOMETA_RUN: "false"
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # 🧹 14. MAINTAINERR - 시청 완료 미디어 자동 정리 및 시놀로지 용량 수호자
+  # ---------------------------------------------------------------------------
+  maintainerr:
+    image: ghcr.io/jorenn92/maintainerr:latest
+    container_name: mediarr-maintainerr
+    hostname: maintainerr
+    networks:
+      mediarr_net:
+        aliases:
+          - maintainerr
+          - mediarr-maintainerr
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    user: "1026:100"
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "6246:6246/tcp"
+    volumes:
+      - /volume1/docker/maintainerr:/opt/data:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    restart: on-failure:5
+    logging: *default-logging

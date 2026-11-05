@@ -1,0 +1,121 @@
+# =============================================================================
+# [기존 설정 백업 1] /volume1/docker/plexhw/compose.yaml
+# =============================================================================
+version: "3.9"
+services:
+  plex:
+    image: ghcr.io/linuxserver/plex:latest
+    container_name: PlexHW
+    hostname: plex
+    network_mode: host
+    mem_limit: 4g
+    cpu_shares: 1024
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: curl -fs http://localhost:32400/identity || exit 1
+    volumes:
+      - /volume1/docker/plexhw:/config:rw
+      - /volume1/video/movies:/movies:ro
+      - /volume1/video/tv_shows:/tv_shows:ro
+      - /volume1/video/music:/music:ro
+      - /volume1/mediarr/media/movies:/data/media/movies:ro # 신규 영화 폴더 추가
+      - /volume1/mediarr/media/tv:/data/media/tv:ro # 신규 드라마·예능 폴더 추가
+      - /volume1/mediarr/media/anime:/data/media/anime:ro # 신규 애니 폴더 추가
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/dri/card0:/dev/dri/card0
+    environment:
+      TZ: Asia/Seoul
+      PUID: 1026
+      PGID: 100
+      VERSION: public
+      PLEX_CLAIM: ${PLEX_CLAIM} # STEP 4 (보안 마스킹 처리됨 -> .env 보관)
+    restart: on-failure:5
+
+# =============================================================================
+# [기존 설정 백업 2] /volume1/docker/qbittorrent_gluetun/compose.yaml
+# =============================================================================
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=surfshark
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY} # 본인 Surfshark WireGuard 키 (.env 분리)
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - SERVER_COUNTRIES=Japan
+      - SERVER_CITIES=Tokyo
+      - PUID=1026
+      - PGID=100
+      - TZ=Asia/Seoul
+    volumes:
+      - /volume1/docker/gluetun:/gluetun
+    ports:
+      - 8181:8181/tcp # qBittorrent Web UI 포트
+      - 6881:6881 # Torrent 포트 (TCP)
+      - 6881:6881/udp # Torrent 포트 (UDP)
+      - 9696:9696/tcp # Prowlarr Web UI 포트 (추가됨)
+      - 8191:8191/tcp # FlareSolverr 포트 (추가됨)
+    restart: on-failure:5
+
+  qbittorrent:
+    image: linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.depends-on=gluetun"
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=Asia/Seoul
+      - WEBUI_PORT=8181
+    volumes:
+      - /volume1/docker/qbittorrent:/config
+      - /volume1/torrents:/downloads # 기존 토렌트 유지용
+      - /volume1/mediarr:/data # 신규 -arr 하드링크 전용 경로
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: on-failure:5
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.depends-on=gluetun"
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=Asia/Seoul
+    volumes:
+      - /volume1/docker/prowlarr:/config
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: on-failure:5
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.depends-on=gluetun"
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Asia/Seoul
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: on-failure:5

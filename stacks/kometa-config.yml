@@ -1,0 +1,38 @@
+# =============================================================================
+# 🎨 KOMETA (Plex Meta Manager) 포스터 4K·HDR·평점 배지 자동화 템플릿
+# 저장 위치: /volume1/docker/kometa/config.yml (mediarr-control-center 자동 생성)
+# =============================================================================
+libraries:
+  Movies:
+    collection_files:
+      - default: basic
+      - default: imdb
+      - default: streaming
+    overlay_files:
+      - remove_overlays: false
+      - default: ribbon
+      - default: resolution
+      - default: audio_codec
+      - default: ratings
+  TV Shows:
+    collection_files:
+      - default: basic
+      - default: streaming
+    overlay_files:
+      - remove_overlays: false
+      - default: ribbon
+      - default: resolution
+      - default: ratings
+
+plex:
+  url: http://192.168.0.100:32400
+  token: YOUR_PLEX_TOKEN
+  timeout: 60
+  clean_bundles: true
+  empty_trash: true
+  optimize: true
+
+tmdb:
+  apikey: YOUR_TMDB_API_KEY
+  language: ko
+  region: KR

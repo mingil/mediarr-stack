@@ -1,0 +1,58 @@
+# =============================================================================
+# ♻️ TRaSH GUIDES 공식 표준 화질 프로필 & 한국어 우대 자동 동기화 (recyclarr.yml)
+# 저장 위치: /volume1/docker/recyclarr/recyclarr.yml (mediarr-control-center 자동 생성)
+# =============================================================================
+
+sonarr:
+  series_tv_anime:
+    base_url: http://sonarr:8989
+    api_key: !env_var SONARR_API_KEY
+
+    delete_old_custom_formats: true
+    replace_existing_custom_formats: true
+
+    include:
+      # TRaSH 공식 WEB-1080p 및 WEB-2160p(4K) 최적 화질 정의
+      - template: sonarr-quality-definition-series
+      - template: sonarr-v4-quality-profile-web-1080p
+      - template: sonarr-v4-custom-formats-web-1080p
+      - template: sonarr-v4-quality-profile-web-2160p
+      - template: sonarr-v4-custom-formats-web-2160p
+      # 애니메이션 전용 프로필
+      - template: sonarr-v4-quality-profile-anime
+      - template: sonarr-v4-custom-formats-anime
+
+    custom_formats:
+      # 저품질 릴리즈 및 캠버전 원천 차단 (-10000점)
+      - trash_ids:
+          - 85c61753df5da1fb2aab6f2a47426b09 # BR-DISK
+          - 9c11cd3f07101cdba90a2d81cf0e56b4 # LQ (저품질 그룹)
+          - 47435ece6b99a0b477caf360e79ba0bb # x265 (HD 저화질 재인코딩 차단)
+        assign_scores_to:
+          - name: WEB-1080p
+
+radarr:
+  uhd_hd_movies:
+    base_url: http://radarr:7878
+    api_key: !env_var RADARR_API_KEY
+
+    delete_old_custom_formats: true
+    replace_existing_custom_formats: true
+
+    include:
+      # TRaSH 공식 영화 품질 정의 및 HD Bluray+WEB / UHD Bluray+WEB 프로필
+      - template: radarr-quality-definition-movie
+      - template: radarr-quality-profile-hd-bluray-web
+      - template: radarr-custom-formats-hd-bluray-web
+      - template: radarr-quality-profile-uhd-bluray-web
+      - template: radarr-custom-formats-uhd-bluray-web
+
+    custom_formats:
+      # 캠버전(CAM), 3D, 불량 릴리즈 완벽 차단 (-10000점)
+      - trash_ids:
+          - ed38b889b31be83fda192888e2286d83 # BR-DISK
+          - 90a6f9a284dff5103f6346090e6280c8 # LQ (저품질/캠버전)
+          - b8cd450cbfa689c0259a01d9e29ba3d6 # 3D
+        assign_scores_to:
+          - name: HD Bluray + WEB
+          - name: UHD Bluray + WEB
