@@ -270,11 +270,42 @@ def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
             return s_logs, r_logs, p_logs
 
     s_logs, r_logs, p_logs = asyncio.run(_run_api_tests())
-    assert len(s_logs) == 5  # Naming, MediaManagement, 2 RootFolders (/tv, /anime), qBittorrent
+    assert len(s_logs) == 6  # Naming, MediaManagement, 2 RootFolders (/tv, /anime), qBittorrent, ReleaseProfile
     assert len(r_logs) == 4  # Naming, MediaManagement, 1 RootFolder (/movies), qBittorrent
     assert len(p_logs) == 4  # FlareSolverr Proxy, Sonarr FullSync, Radarr FullSync, Starter Indexers
     assert "{tvdb-{TvdbId}}" in TRASH_SONARR_NAMING["seriesFolderFormat"]
     assert "{tmdb-{TmdbId}}" in TRASH_RADARR_NAMING["movieFolderFormat"]
+
+
+def test_universal_korean_subtitle_engine_tier_helpers():
+    from app.resources.yifysubtitles import (
+        _match_episode_in_zip_namelist,
+        ass_to_srt,
+        extract_absolute_episode_from_video_name,
+        is_valid_korean_srt_text,
+        resolve_korean_series_title,
+    )
+
+    assert resolve_korean_series_title("Jujutsu Kaisen") == "주술회전"
+    assert resolve_korean_series_title("Bleach") == "블리치"
+    assert resolve_korean_series_title("One Piece") == "원피스"
+    assert resolve_korean_series_title("Naruto") == "나루토"
+    assert extract_absolute_episode_from_video_name("Naruto (2002) - S04E01 - 132 - For a Friend.mkv") == 132
+
+    # Ensure season-mismatch (S02E01 when season=4) is rejected
+    namelist = ["[Judas] Naruto - S02E01 (036).smi", "[Moozzi2] Jujutsu Kaisen - 01.smi"]
+    assert _match_episode_in_zip_namelist(namelist, 4, 1, 132, is_season_specific_archive=False) is None
+    assert _match_episode_in_zip_namelist(namelist, 1, 1, 1, is_season_specific_archive=True) == "[Moozzi2] Jujutsu Kaisen - 01.smi"
+
+    sample_ass = (
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,{\\pos(100,200)}영역 전개! 무량공처! 호로와 사신의 싸움은 끝나지 않았다!\n"
+    )
+    srt_out = ass_to_srt(sample_ass)
+    assert "00:00:01,000 --> 00:00:03,500" in srt_out
+    assert "영역 전개! 무량공처!" in srt_out
+    assert is_valid_korean_srt_text(srt_out * 10) is True
 
 
 def test_smi2srt_korean_encoding_and_backup_engine(tmp_path: Path):

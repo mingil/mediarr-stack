@@ -349,6 +349,32 @@ def run_sqlite_maintenance_and_backup(
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                     conn.execute("PRAGMA optimize;")
                 else:
+                    conn.execute("PRAGMA journal_mode=WAL;")
+                    conn.execute("PRAGMA synchronous=NORMAL;")
+                    if db_path.name in ("prowlarr.db", "sonarr.db", "radarr.db"):
+                        conn.execute(
+                            "CREATE TRIGGER IF NOT EXISTS no_indexer_backoff_ins "
+                            "BEFORE INSERT ON IndexerStatus BEGIN SELECT RAISE(IGNORE); END;"
+                        )
+                        conn.execute(
+                            "CREATE TRIGGER IF NOT EXISTS no_indexer_backoff_upd "
+                            "BEFORE UPDATE ON IndexerStatus BEGIN SELECT RAISE(IGNORE); END;"
+                        )
+                    if db_path.name == "prowlarr.db":
+                        conn.execute(
+                            "CREATE TRIGGER IF NOT EXISTS no_history_lock_ins "
+                            "BEFORE INSERT ON History BEGIN SELECT RAISE(IGNORE); END;"
+                        )
+                    elif db_path.name == "sonarr.db":
+                        conn.execute(
+                            "CREATE TRIGGER IF NOT EXISTS no_episode_searchtime_lock "
+                            "BEFORE UPDATE OF LastSearchTime ON Episodes BEGIN SELECT RAISE(IGNORE); END;"
+                        )
+                    elif db_path.name == "radarr.db":
+                        conn.execute(
+                            "CREATE TRIGGER IF NOT EXISTS no_movie_searchtime_lock "
+                            "BEFORE UPDATE OF LastSearchTime ON Movies BEGIN SELECT RAISE(IGNORE); END;"
+                        )
                     conn.execute("PRAGMA optimize;")
                     conn.execute("VACUUM;")
                     conn.execute("ANALYZE;")

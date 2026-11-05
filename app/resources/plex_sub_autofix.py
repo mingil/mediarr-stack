@@ -10,13 +10,19 @@ import xml.etree.ElementTree as ET
 PLEX_URL = os.environ.get("PLEX_URL", "http://172.17.0.1:32400")
 PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "yns1REZh8vrmyMzqEWot")
 
-# Self-heal yifysubtitles.py if needed
+# Self-heal yifysubtitles.py and Bazarr SQLite WAL concurrency settings if container was recreated
 try:
     src_yify = "/config/yifysubtitles.py"
     dst_yify = "/app/bazarr/bin/custom_libs/subliminal_patch/providers/yifysubtitles.py"
     if os.path.exists(src_yify) and os.path.exists(dst_yify):
         if os.path.getsize(src_yify) != os.path.getsize(dst_yify):
             shutil.copy2(src_yify, dst_yify)
+    db_py = "/app/bazarr/bin/bazarr/app/database.py"
+    if os.path.exists(db_py):
+        db_txt = open(db_py, "r", encoding="utf-8", errors="ignore").read()
+        if "timeout': 5" in db_txt:
+            db_txt = db_txt.replace("'timeout': 5", "'timeout': 60")
+            open(db_py, "w", encoding="utf-8").write(db_txt)
 except Exception:
     pass
 
@@ -57,7 +63,7 @@ def refresh_and_select_korean_in_plex(directory: str) -> None:
                 urllib.request.urlopen(f"{PLEX_URL}/library/sections/{sec_key}/refresh?X-Plex-Token={PLEX_TOKEN}", timeout=10)
 
         time.sleep(2)
-        folder_name = os.path.basename(directory.rstrip("/"))
+        clean_dir = directory.rstrip("/") if directory else ""
         for sec_key, sec_type in target_sections:
             qtype = "1" if sec_type == "movie" else "4"
             all_xml = urllib.request.urlopen(f"{PLEX_URL}/library/sections/{sec_key}/all?type={qtype}&X-Plex-Token={PLEX_TOKEN}", timeout=10).read()
@@ -71,7 +77,7 @@ def refresh_and_select_korean_in_plex(directory: str) -> None:
                 if part is None:
                     continue
                 file_path = part.attrib.get("file", "")
-                if folder_name and (folder_name in file_path or directory.rstrip("/") in file_path):
+                if not clean_dir or clean_dir in file_path:
                     req = urllib.request.Request(f"{PLEX_URL}/library/metadata/{rkey}/refresh?X-Plex-Token={PLEX_TOKEN}", method="PUT")
                     urllib.request.urlopen(req, timeout=10)
                     matched_rkeys.append(rkey)

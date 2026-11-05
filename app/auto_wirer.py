@@ -418,6 +418,66 @@ async def configure_sonarr_via_api(
             await client.post(f"{base_url}/api/v3/notification?forceSave=true", headers=headers, json=nt_payload)
             logs.append("Sonarr: 임포트 완료 시 Plex 라이브러리 실시간 자동 스캔(PlexServer Connect) 연결")
 
+    # Enforce Release Profile to block foreign burned-in hardsubs & non-Korean/non-English dubs
+    try:
+        r_rp = await client.get(f"{base_url}/api/v3/releaseprofile", headers=headers)
+        if r_rp.status_code == 200:
+            rps = r_rp.json()
+            if not any(rp.get("name") == "Block Foreign-Only Releases" for rp in rps):
+                rp_payload = {
+                    "name": "Block Foreign-Only Releases",
+                    "enabled": True,
+                    "required": [],
+                    "ignored": [
+                        "Naruto-Kun.Hu",
+                        "Naruto Kun Hu",
+                        "VOSTFR",
+                        "SUB ITA",
+                        "PT-BR",
+                        "Dublado",
+                        "AniLibria",
+                        "Relleno",
+                        "[Spanish]",
+                        "RUS",
+                        "GERMAN",
+                        "FRENCH",
+                        "ITALIAN",
+                    ],
+                    "indexerId": 0,
+                    "tags": [],
+                }
+                await client.post(f"{base_url}/api/v3/releaseprofile", headers=headers, json=rp_payload)
+                logs.append("Sonarr: 외국어 하드자막·더빙 릴리즈 자동 차단 프로필(Block Foreign-Only Releases) 적용")
+    except Exception:
+        pass
+
+    # Isolate anime searches strictly to Nyaa.si (prevent LimeTorrents/TPB foreign anime grabs & rate-limits)
+    try:
+        r_sidx = await client.get(f"{base_url}/api/v3/indexer", headers=headers)
+        if r_sidx.status_code == 200:
+            for idx_obj in r_sidx.json():
+                iname = (idx_obj.get("name") or "").lower()
+                if "nyaa" not in iname and "tokyo" not in iname:
+                    changed = False
+                    for f in idx_obj.get("fields", []):
+                        if f.get("name") == "categories" and isinstance(f.get("value"), list) and 5070 in f["value"]:
+                            f["value"] = [c for c in f["value"] if c != 5070] or [5000]
+                            changed = True
+                        elif f.get("name") == "animeCategories" and f.get("value"):
+                            f["value"] = []
+                            changed = True
+                        elif f.get("name") == "animeStandardFormatSearch" and f.get("value") is True:
+                            f["value"] = False
+                            changed = True
+                    if changed:
+                        await client.put(
+                            f"{base_url}/api/v3/indexer/{idx_obj['id']}?forceSave=true",
+                            headers=headers,
+                            json=idx_obj,
+                        )
+    except Exception:
+        pass
+
     return logs
 
 
@@ -608,6 +668,35 @@ async def configure_prowlarr_via_api(
             if added_count > 0:
                 logs.append(f"Prowlarr: 기본 공개 인덱서 {added_count}종 자동 등록 및 Sonarr·Radarr 동기화 완료")
 
+    # 5. Tune Nyaa.si indexer settings (cat-id=3 English-translated only, disable S01 title rewriting that breaks multi-cour anime)
+    try:
+        r_idx2 = await client.get(f"{base_url}/api/v1/indexer", headers=headers)
+        if r_idx2.status_code == 200:
+            for idx_obj in r_idx2.json():
+                if str(idx_obj.get("definitionName", "")).lower() == "nyaasi":
+                    desired = {
+                        "cat-id": 3,
+                        "sonarr_compatibility": False,
+                        "strip_s01": False,
+                        "prefer_magnet_links": False,
+                        "sort": 1,
+                    }
+                    changed = False
+                    for f in idx_obj.get("fields", []):
+                        fname = f.get("name")
+                        if fname in desired and f.get("value") != desired[fname]:
+                            f["value"] = desired[fname]
+                            changed = True
+                    if changed:
+                        await client.put(
+                            f"{base_url}/api/v1/indexer/{idx_obj['id']}?forceSave=true",
+                            headers=headers,
+                            json=idx_obj,
+                        )
+                        logs.append("Prowlarr: Nyaa.si 애니메이션 인덱서 정밀 튜닝(외국어 하드자막 차단 및 절대 회차 파싱 보호) 적용")
+    except Exception:
+        pass
+
     return logs
 
 
@@ -764,8 +853,21 @@ async def auto_wire_all_services(
             )
         )
 
-    # 2. Live REST API auto-provisioning (Sonarr, Radarr, Prowlarr)
+    # 2. Live REST API auto-provisioning (Prowlarr first, then Sonarr & Radarr so indexer overrides persist)
     async with httpx.AsyncClient(timeout=5.0) as client:
+        if creds["prowlarr_api_key"]:
+            try:
+                p_logs = await configure_prowlarr_via_api(
+                    client,
+                    base_url=prowlarr_url,
+                    prowlarr_api_key=creds["prowlarr_api_key"],
+                    sonarr_api_key=creds["sonarr_api_key"],
+                    radarr_api_key=creds["radarr_api_key"],
+                )
+                completed_actions.extend(p_logs)
+            except Exception as exc:
+                completed_actions.append(f"Prowlarr API 대기 중 ({exc})")
+
         if creds["sonarr_api_key"]:
             try:
                 s_logs = await configure_sonarr_via_api(
@@ -795,19 +897,6 @@ async def auto_wire_all_services(
                 completed_actions.extend(r_logs)
             except Exception as exc:
                 completed_actions.append(f"Radarr API 대기 중 ({exc})")
-
-        if creds["prowlarr_api_key"]:
-            try:
-                p_logs = await configure_prowlarr_via_api(
-                    client,
-                    base_url=prowlarr_url,
-                    prowlarr_api_key=creds["prowlarr_api_key"],
-                    sonarr_api_key=creds["sonarr_api_key"],
-                    radarr_api_key=creds["radarr_api_key"],
-                )
-                completed_actions.extend(p_logs)
-            except Exception as exc:
-                completed_actions.append(f"Prowlarr API 대기 중 ({exc})")
 
         if d_root.exists():
             try:
