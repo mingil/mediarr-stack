@@ -246,8 +246,8 @@ def provision_seerr_settings(
                     "apiKey": radarr_api_key,
                     "useSsl": False,
                     "baseUrl": "",
-                    "activeProfileId": 1,
-                    "activeProfileName": "Any",
+                    "activeProfileId": 4,
+                    "activeProfileName": "HD-1080p",
                     "activeDirectory": "/data/media/movies",
                     "is4k": False,
                     "minimumAvailability": "released",
@@ -274,11 +274,11 @@ def provision_seerr_settings(
                     "apiKey": sonarr_api_key,
                     "useSsl": False,
                     "baseUrl": "",
-                    "activeProfileId": 1,
-                    "activeProfileName": "Any",
+                    "activeProfileId": 4,
+                    "activeProfileName": "HD-1080p",
                     "activeDirectory": "/data/media/tv",
-                    "activeAnimeProfileId": 1,
-                    "activeAnimeProfileName": "Any",
+                    "activeAnimeProfileId": 4,
+                    "activeAnimeProfileName": "HD-1080p",
                     "activeAnimeDirectory": "/data/media/anime",
                     "enableSeasonFolders": True,
                     "is4k": False,
@@ -306,7 +306,7 @@ async def configure_sonarr_via_api(
     client: httpx.AsyncClient,
     base_url: str,
     api_key: str,
-    qbit_host: str = "qbittorrent",
+    qbit_host: str = "172.17.0.1",
     qbit_port: int = 8181,
     qbit_user: str = "admin",
     qbit_pass: str = "",
@@ -360,7 +360,7 @@ async def configure_sonarr_via_api(
                     {"name": "tvCategory", "value": "tv"},
                 ],
             }
-            await client.post(f"{base_url}/api/v3/downloadclient", headers=headers, json=payload)
+            await client.post(f"{base_url}/api/v3/downloadclient?forceSave=true", headers=headers, json=payload)
             logs.append(f"Sonarr: qBittorrent({qbit_host}:{qbit_port}) 다운로드 클라이언트 자동 연결")
 
     return logs
@@ -370,7 +370,7 @@ async def configure_radarr_via_api(
     client: httpx.AsyncClient,
     base_url: str,
     api_key: str,
-    qbit_host: str = "qbittorrent",
+    qbit_host: str = "172.17.0.1",
     qbit_port: int = 8181,
     qbit_user: str = "admin",
     qbit_pass: str = "",
@@ -423,7 +423,7 @@ async def configure_radarr_via_api(
                     {"name": "movieCategory", "value": "movies"},
                 ],
             }
-            await client.post(f"{base_url}/api/v3/downloadclient", headers=headers, json=payload)
+            await client.post(f"{base_url}/api/v3/downloadclient?forceSave=true", headers=headers, json=payload)
             logs.append(f"Radarr: qBittorrent({qbit_host}:{qbit_port}) 다운로드 클라이언트 자동 연결")
 
     return logs
@@ -464,12 +464,12 @@ async def configure_prowlarr_via_api(
                 "configContract": "FlareSolverrSettings",
                 "tags": [tag_id],
                 "fields": [
-                    {"name": "host", "value": "http://flaresolverr:8191"},
+                    {"name": "host", "value": "http://127.0.0.1:8191/"},
                     {"name": "requestTimeout", "value": 60},
                 ],
             }
-            await client.post(f"{base_url}/api/v1/indexerproxy", headers=headers, json=px_payload)
-            logs.append("Prowlarr: FlareSolverr(http://flaresolverr:8191) Cloudflare 우회 프록시 자동 등록")
+            await client.post(f"{base_url}/api/v1/indexerproxy?forceSave=true", headers=headers, json=px_payload)
+            logs.append("Prowlarr: FlareSolverr(http://127.0.0.1:8191/) Cloudflare 우회 프록시 자동 등록")
 
     # 3. Register Sonarr & Radarr Full-Sync Applications
     r_apps = await client.get(f"{base_url}/api/v1/applications", headers=headers)
@@ -482,20 +482,13 @@ async def configure_prowlarr_via_api(
                 "implementation": "Sonarr",
                 "configContract": "SonarrSettings",
                 "fields": [
-                    {"name": "prowlarrUrl", "value": "http://prowlarr:9696"},
-                    {"name": "baseUrl", "value": "http://sonarr:8989"},
+                    {"name": "prowlarrUrl", "value": "http://172.17.0.1:9696"},
+                    {"name": "baseUrl", "value": "http://172.17.0.1:8989"},
                     {"name": "apiKey", "value": sonarr_api_key},
                 ],
             }
-            r_s_app = await client.post(f"{base_url}/api/v1/applications", headers=headers, json=sonarr_app)
-            if r_s_app.status_code not in (200, 201):
-                sonarr_app["fields"] = [
-                    {"name": "prowlarrUrl", "value": "http://192.168.48.1:9696"},
-                    {"name": "baseUrl", "value": "http://192.168.48.1:8989"},
-                    {"name": "apiKey", "value": sonarr_api_key},
-                ]
-                await client.post(f"{base_url}/api/v1/applications", headers=headers, json=sonarr_app)
-            logs.append("Prowlarr: Sonarr(http://sonarr:8989) 인덱서 실시간 Full Sync 자동 연결")
+            await client.post(f"{base_url}/api/v1/applications?forceSave=true", headers=headers, json=sonarr_app)
+            logs.append("Prowlarr: Sonarr(http://172.17.0.1:8989) 인덱서 실시간 Full Sync 자동 연결")
 
         if radarr_api_key and not any(a.get("implementation") == "Radarr" for a in apps):
             radarr_app = {
@@ -504,20 +497,13 @@ async def configure_prowlarr_via_api(
                 "implementation": "Radarr",
                 "configContract": "RadarrSettings",
                 "fields": [
-                    {"name": "prowlarrUrl", "value": "http://prowlarr:9696"},
-                    {"name": "baseUrl", "value": "http://radarr:7878"},
+                    {"name": "prowlarrUrl", "value": "http://172.17.0.1:9696"},
+                    {"name": "baseUrl", "value": "http://172.17.0.1:7878"},
                     {"name": "apiKey", "value": radarr_api_key},
                 ],
             }
-            r_r_app = await client.post(f"{base_url}/api/v1/applications", headers=headers, json=radarr_app)
-            if r_r_app.status_code not in (200, 201):
-                radarr_app["fields"] = [
-                    {"name": "prowlarrUrl", "value": "http://192.168.48.1:9696"},
-                    {"name": "baseUrl", "value": "http://192.168.48.1:7878"},
-                    {"name": "apiKey", "value": radarr_api_key},
-                ]
-                await client.post(f"{base_url}/api/v1/applications", headers=headers, json=radarr_app)
-            logs.append("Prowlarr: Radarr(http://radarr:7878) 인덱서 실시간 Full Sync 자동 연결")
+            await client.post(f"{base_url}/api/v1/applications?forceSave=true", headers=headers, json=radarr_app)
+            logs.append("Prowlarr: Radarr(http://172.17.0.1:7878) 인덱서 실시간 Full Sync 자동 연결")
 
     # 4. Auto-register starter public indexers if Prowlarr currently has 0 indexers
     r_idx = await client.get(f"{base_url}/api/v1/indexer", headers=headers)
@@ -607,8 +593,8 @@ async def configure_seerr_via_api(
                     "apiKey": radarr_api_key,
                     "useSsl": False,
                     "baseUrl": "",
-                    "activeProfileId": 1,
-                    "activeProfileName": "Any",
+                    "activeProfileId": 4,
+                    "activeProfileName": "HD-1080p",
                     "activeDirectory": "/data/media/movies",
                     "is4k": False,
                     "minimumAvailability": "released",
@@ -634,11 +620,11 @@ async def configure_seerr_via_api(
                     "apiKey": sonarr_api_key,
                     "useSsl": False,
                     "baseUrl": "",
-                    "activeProfileId": 1,
-                    "activeProfileName": "Any",
+                    "activeProfileId": 4,
+                    "activeProfileName": "HD-1080p",
                     "activeDirectory": "/data/media/tv",
-                    "activeAnimeProfileId": 1,
-                    "activeAnimeProfileName": "Any",
+                    "activeAnimeProfileId": 4,
+                    "activeAnimeProfileName": "HD-1080p",
                     "activeAnimeDirectory": "/data/media/anime",
                     "enableSeasonFolders": True,
                     "is4k": False,
