@@ -1,13 +1,25 @@
 """Automated Unit & Integration Tests for the Unified Mediarr Stack Control Center (mediarr-stack)."""
 
 import io
+import json
 import sqlite3
 import zipfile
 from pathlib import Path
 
+import httpx
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from app.auto_wirer import (
+    TRASH_RADARR_NAMING,
+    TRASH_SONARR_NAMING,
+    configure_prowlarr_via_api,
+    configure_radarr_via_api,
+    configure_sonarr_via_api,
+    provision_bazarr_config,
+    provision_qbittorrent_categories,
+)
 from app.runtime_manager import (
     bootstrap_host_environment,
     run_sqlite_maintenance_and_backup,
@@ -182,3 +194,55 @@ def test_download_bundle_zip():
     assert "kometa/config.yml" in names
     assert "synology-mediarr-init.sh" in names
     assert "mediarr-maintenance-doctor.sh" in names
+
+
+def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
+    import asyncio
+
+    docker_root = tmp_path / "docker"
+    docker_root.mkdir()
+
+    # 1. Test qBittorrent categories.json & Bazarr config.yaml auto-provisioning
+    qbit_msg = provision_qbittorrent_categories(docker_root)
+    assert "자동 생성 완료" in qbit_msg
+    cats = json.loads((docker_root / "qbittorrent/qBittorrent/config/categories.json").read_text(encoding="utf-8"))
+    assert cats["movies"]["save_path"] == "/data/torrents/movies"
+    assert cats["tv"]["save_path"] == "/data/torrents/tv"
+    assert cats["anime"]["save_path"] == "/data/torrents/anime"
+
+    baz_msg = provision_bazarr_config(docker_root, sonarr_api_key="S_KEY_1", radarr_api_key="R_KEY_2")
+    assert "설정 완료" in baz_msg
+    baz_cfg = yaml.safe_load((docker_root / "bazarr/config/config.yaml").read_text(encoding="utf-8"))
+    assert baz_cfg["sonarr"]["apikey"] == "S_KEY_1"
+    assert baz_cfg["radarr"]["apikey"] == "R_KEY_2"
+    assert baz_cfg["subsync"]["use_subsync"] is True
+
+    # 2. Test Sonarr, Radarr, Prowlarr REST API auto-configuration via MockTransport
+    recorded_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        recorded_requests.append((request.method, str(request.url)))
+        path = request.url.path
+        if request.method == "GET":
+            if path.endswith("/config/naming") or path.endswith("/config/mediamanagement"):
+                return httpx.Response(200, json={"id": 1})
+            return httpx.Response(200, json=[])
+        return httpx.Response(201, json={"id": 1})
+
+    async def _run_api_tests():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as mock_client:
+            s_logs = await configure_sonarr_via_api(mock_client, "http://sonarr:8989", "S_KEY_1")
+            r_logs = await configure_radarr_via_api(mock_client, "http://radarr:7878", "R_KEY_2")
+            p_logs = await configure_prowlarr_via_api(
+                mock_client, "http://prowlarr:9696", "P_KEY_3", "S_KEY_1", "R_KEY_2"
+            )
+            return s_logs, r_logs, p_logs
+
+    s_logs, r_logs, p_logs = asyncio.run(_run_api_tests())
+    assert len(s_logs) == 5  # Naming, MediaManagement, 2 RootFolders (/tv, /anime), qBittorrent
+    assert len(r_logs) == 4  # Naming, MediaManagement, 1 RootFolder (/movies), qBittorrent
+    assert len(p_logs) == 3  # FlareSolverr Proxy, Sonarr FullSync, Radarr FullSync
+    assert "{tvdb-{TvdbId}}" in TRASH_SONARR_NAMING["seriesFolderFormat"]
+    assert "{tmdb-{TmdbId}}" in TRASH_RADARR_NAMING["movieFolderFormat"]
+

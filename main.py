@@ -33,6 +33,7 @@ from app.mediarr_generator import (
     generate_unpackerr_config,
     generate_wiring_guide,
 )
+from app.auto_wirer import auto_wire_all_services
 from app.runtime_manager import (
     bootstrap_host_environment,
     run_sqlite_maintenance_and_backup,
@@ -45,19 +46,22 @@ LEGACY_DIR = BASE_DIR / "legacy-backup"
 
 
 async def _periodic_maintenance_loop(interval_hours: float) -> None:
-    """Background loop inside mediarr-control-center: syncs API keys 60s after boot, then runs 24h DB optimization."""
-    # First pass after 60s to auto-bridge Sonarr/Radarr API keys generated during initial container boot
-    await asyncio.sleep(60.0)
-    try:
-        await asyncio.to_thread(bootstrap_host_environment)
-    except Exception:
-        pass
+    """Background loop inside mediarr-control-center: auto-wires Sonarr/Radarr/Prowlarr/Bazarr/qBittorrent after boot, then runs 24h DB optimization."""
+    # Run initial passes at 45s and 120s after boot to auto-wire all services once containers finish booting
+    for initial_delay in (45.0, 75.0):
+        await asyncio.sleep(initial_delay)
+        try:
+            await asyncio.to_thread(bootstrap_host_environment)
+            await auto_wire_all_services()
+        except Exception:
+            pass
 
     sleep_seconds = max(3600.0, interval_hours * 3600.0)
     while True:
         await asyncio.sleep(sleep_seconds)
         try:
             await asyncio.to_thread(bootstrap_host_environment)
+            await auto_wire_all_services()
             await asyncio.to_thread(run_sqlite_maintenance_and_backup)
         except Exception:
             pass
@@ -258,7 +262,19 @@ async def generate_stack(cfg: MediarrStackConfigRequest) -> Dict[str, Any]:
 @app.post("/api/runtime/bootstrap")
 async def trigger_runtime_bootstrap() -> Dict[str, Any]:
     """Trigger immediate directory creation, stale Plex PID removal, and Recyclarr/Kometa config generation."""
-    return bootstrap_host_environment()
+    boot = bootstrap_host_environment()
+    wire = await auto_wire_all_services()
+    return {
+        **boot,
+        "auto_wire": wire,
+    }
+
+
+@app.post("/api/runtime/autowire")
+async def trigger_runtime_autowire() -> Dict[str, Any]:
+    """Trigger Zero-Touch REST API & Config Auto-Wirer for Sonarr, Radarr, Prowlarr, Bazarr, and qBittorrent."""
+    bootstrap_host_environment()
+    return await auto_wire_all_services()
 
 
 @app.post("/api/runtime/maintenance")
