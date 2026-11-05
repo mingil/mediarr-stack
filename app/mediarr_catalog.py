@@ -415,7 +415,7 @@ MEDIARR_SERVICES_CATALOG: List[Dict[str, Any]] = [
         "category": "automation",
         "essential": False,
         "default_enabled": True,
-        "image": "ghcr.io/recyclarr/recyclarr:latest",
+        "image": "ghcr.io/recyclarr/recyclarr:7",
         "port": None,
         "webui_port": None,
         "role_badge": "TRaSH 최고급 화질 프로필 자동 동기화",

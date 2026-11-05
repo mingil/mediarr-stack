@@ -693,7 +693,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "  # ♻️ 10. RECYCLARR - TRaSH Guides 최고급 화질 프로필 & 한국어 우대 자동 동기화",
             "  # ---------------------------------------------------------------------------",
             "  recyclarr:",
-            "    image: ghcr.io/recyclarr/recyclarr:latest",
+            "    image: ghcr.io/recyclarr/recyclarr:7",
             "    container_name: mediarr-recyclarr",
             "    hostname: recyclarr",
             *_wt_labels(wt),
