@@ -366,12 +366,12 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "",
         ])
 
-    # 4. SEERR (JELLYSEERR / OVERSEERR)
+    # 4. SEERR (UNIFIED SEERR / OVERSEERR)
     if "seerr" in selected:
         seerr_image = (
             "lscr.io/linuxserver/overseerr:latest"
             if cfg.seerr_variant == "overseerr"
-            else "ghcr.io/fallenbagel/jellyseerr:latest"
+            else "ghcr.io/seerr-team/seerr:latest"
         )
         seerr_vol = (
             f"      - {docker_root}/seerr:/config:rw"

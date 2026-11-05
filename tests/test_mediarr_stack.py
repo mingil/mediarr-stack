@@ -90,6 +90,7 @@ def test_generate_full_compose_organic_integration():
     assert "mediarr-control-center" in services
     assert "smi2srt" in services
     assert services["smi2srt"]["image"] == "cpm0722/smi2srt:latest"
+    assert services["seerr"]["image"] == "ghcr.io/seerr-team/seerr:latest"
 
     # Verify Watchtower labels on all services and depends-on=mediarr-gluetun on VPN-routed services
     for svc_name, svc_def in services.items():
@@ -229,7 +230,8 @@ def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
     )
     assert "자동 연동 완료" in seerr_msg
     seerr_cfg = json.loads((docker_root / "seerr/settings.json").read_text(encoding="utf-8"))
-    assert seerr_cfg["plex"]["ip"] == "192.168.0.100"
+    assert seerr_cfg["plex"]["ip"] == "host.docker.internal"
+    assert seerr_cfg["main"]["locale"] == "en"
     assert seerr_cfg["radarr"][0]["apiKey"] == "R_KEY_2"
     assert seerr_cfg["radarr"][0]["activeDirectory"] == "/data/media/movies"
     assert seerr_cfg["sonarr"][0]["apiKey"] == "S_KEY_1"

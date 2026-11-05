@@ -209,13 +209,14 @@ def provision_seerr_settings(
             data = {}
 
     main_sec = data.setdefault("main", {})
-    main_sec["locale"] = "ko"
+    main_sec["locale"] = "en"
     main_sec["discoverRegion"] = "KR"
     main_sec["streamingRegion"] = "KR"
 
     plex_sec = data.setdefault("plex", {})
     plex_sec.setdefault("name", "Plex Media Server")
-    plex_sec["ip"] = nas_ip
+    if plex_sec.get("ip") not in ("host.docker.internal", "192.168.48.1"):
+        plex_sec["ip"] = "host.docker.internal"
     plex_sec["port"] = 32400
     plex_sec["useSsl"] = False
 
@@ -471,7 +472,14 @@ async def configure_prowlarr_via_api(
                     {"name": "apiKey", "value": sonarr_api_key},
                 ],
             }
-            await client.post(f"{base_url}/api/v1/applications", headers=headers, json=sonarr_app)
+            r_s_app = await client.post(f"{base_url}/api/v1/applications", headers=headers, json=sonarr_app)
+            if r_s_app.status_code not in (200, 201):
+                sonarr_app["fields"] = [
+                    {"name": "prowlarrUrl", "value": "http://192.168.48.1:9696"},
+                    {"name": "baseUrl", "value": "http://192.168.48.1:8989"},
+                    {"name": "apiKey", "value": sonarr_api_key},
+                ]
+                await client.post(f"{base_url}/api/v1/applications", headers=headers, json=sonarr_app)
             logs.append("Prowlarr: Sonarr(http://sonarr:8989) 인덱서 실시간 Full Sync 자동 연결")
 
         if radarr_api_key and not any(a.get("implementation") == "Radarr" for a in apps):
@@ -486,7 +494,14 @@ async def configure_prowlarr_via_api(
                     {"name": "apiKey", "value": radarr_api_key},
                 ],
             }
-            await client.post(f"{base_url}/api/v1/applications", headers=headers, json=radarr_app)
+            r_r_app = await client.post(f"{base_url}/api/v1/applications", headers=headers, json=radarr_app)
+            if r_r_app.status_code not in (200, 201):
+                radarr_app["fields"] = [
+                    {"name": "prowlarrUrl", "value": "http://192.168.48.1:9696"},
+                    {"name": "baseUrl", "value": "http://192.168.48.1:7878"},
+                    {"name": "apiKey", "value": radarr_api_key},
+                ]
+                await client.post(f"{base_url}/api/v1/applications", headers=headers, json=radarr_app)
             logs.append("Prowlarr: Radarr(http://radarr:7878) 인덱서 실시간 Full Sync 자동 연결")
 
     # 4. Auto-register starter public indexers if Prowlarr currently has 0 indexers
@@ -538,28 +553,28 @@ async def configure_seerr_via_api(
 
     headers = {"X-Api-Key": seerr_api_key}
 
-    # 1. Update Main settings (Korean locale & KR discover/streaming region)
+    # 1. Update Main settings (English locale & KR discover/streaming region)
     r_main = await client.get(f"{seerr_url}/api/v1/settings/main", headers=headers)
     if r_main.status_code == 200:
         main_cfg = r_main.json()
-        if main_cfg.get("locale") != "ko" or main_cfg.get("discoverRegion") != "KR":
-            main_cfg["locale"] = "ko"
+        if main_cfg.get("locale") != "en" or main_cfg.get("discoverRegion") != "KR":
+            main_cfg["locale"] = "en"
             main_cfg["discoverRegion"] = "KR"
             main_cfg["streamingRegion"] = "KR"
             await client.post(f"{seerr_url}/api/v1/settings/main", headers=headers, json=main_cfg)
-            logs.append("Seerr API: 한국어(ko) 인터페이스 및 한국 OTT(KR) 탐색 지역 실시간 적용")
+            logs.append("Seerr API: 영어(en) 인터페이스 및 한국 OTT(KR) 탐색 지역 실시간 적용")
 
-    # 2. Update Plex server to local NAS IP (192.168.0.100:32400)
+    # 2. Update Plex server to Docker gateway host (host.docker.internal:32400)
     r_plex = await client.get(f"{seerr_url}/api/v1/settings/plex", headers=headers)
     if r_plex.status_code == 200:
         plex_cfg = r_plex.json()
-        if plex_cfg.get("ip") != nas_ip or plex_cfg.get("port") != 32400:
+        if plex_cfg.get("ip") not in ("host.docker.internal", "192.168.48.1") or plex_cfg.get("port") != 32400:
             await client.post(
                 f"{seerr_url}/api/v1/settings/plex",
                 headers=headers,
-                json={"ip": nas_ip, "port": 32400, "useSsl": False},
+                json={"ip": "host.docker.internal", "port": 32400, "useSsl": False},
             )
-            logs.append(f"Seerr API: Plex 서버 연결 주소를 내부 초고속 직결({nas_ip}:32400)로 실시간 전환")
+            logs.append("Seerr API: Plex 서버 연결 주소를 도커 내부 게이트웨이(host.docker.internal:32400)로 실시간 전환")
 
     # 3. Register Radarr if not already present in live memory
     if radarr_api_key:
