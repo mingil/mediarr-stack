@@ -208,11 +208,16 @@ def provision_seerr_settings(
         except Exception:
             data = {}
 
+    main_sec = data.setdefault("main", {})
+    main_sec["locale"] = "ko"
+    main_sec["discoverRegion"] = "KR"
+    main_sec["streamingRegion"] = "KR"
+
     plex_sec = data.setdefault("plex", {})
     plex_sec.setdefault("name", "Plex Media Server")
-    plex_sec.setdefault("ip", nas_ip)
-    plex_sec.setdefault("port", 32400)
-    plex_sec.setdefault("useSsl", False)
+    plex_sec["ip"] = nas_ip
+    plex_sec["port"] = 32400
+    plex_sec["useSsl"] = False
 
     if radarr_api_key:
         radarr_list = data.setdefault("radarr", [])
@@ -508,11 +513,120 @@ async def configure_prowlarr_via_api(
     return logs
 
 
+async def configure_seerr_via_api(
+    client: httpx.AsyncClient,
+    seerr_url: str,
+    docker_root: Path,
+    nas_ip: str,
+    sonarr_api_key: str,
+    radarr_api_key: str,
+) -> List[str]:
+    """Configure live Seerr instance via REST API (using main.apiKey from settings.json) for Plex local IP, Korean locale, Sonarr & Radarr."""
+    logs: List[str] = []
+    settings_file = docker_root / "seerr/settings.json"
+    if not settings_file.exists():
+        return logs
+
+    try:
+        data = json.loads(settings_file.read_text(encoding="utf-8"))
+        seerr_api_key = data.get("main", {}).get("apiKey", "")
+    except Exception:
+        seerr_api_key = ""
+
+    if not seerr_api_key:
+        return logs
+
+    headers = {"X-Api-Key": seerr_api_key}
+
+    # 1. Update Main settings (Korean locale & KR discover/streaming region)
+    r_main = await client.get(f"{seerr_url}/api/v1/settings/main", headers=headers)
+    if r_main.status_code == 200:
+        main_cfg = r_main.json()
+        if main_cfg.get("locale") != "ko" or main_cfg.get("discoverRegion") != "KR":
+            main_cfg["locale"] = "ko"
+            main_cfg["discoverRegion"] = "KR"
+            main_cfg["streamingRegion"] = "KR"
+            await client.post(f"{seerr_url}/api/v1/settings/main", headers=headers, json=main_cfg)
+            logs.append("Seerr API: 한국어(ko) 인터페이스 및 한국 OTT(KR) 탐색 지역 실시간 적용")
+
+    # 2. Update Plex server to local NAS IP (192.168.0.100:32400)
+    r_plex = await client.get(f"{seerr_url}/api/v1/settings/plex", headers=headers)
+    if r_plex.status_code == 200:
+        plex_cfg = r_plex.json()
+        if plex_cfg.get("ip") != nas_ip or plex_cfg.get("port") != 32400:
+            await client.post(
+                f"{seerr_url}/api/v1/settings/plex",
+                headers=headers,
+                json={"ip": nas_ip, "port": 32400, "useSsl": False},
+            )
+            logs.append(f"Seerr API: Plex 서버 연결 주소를 내부 초고속 직결({nas_ip}:32400)로 실시간 전환")
+
+    # 3. Register Radarr if not already present in live memory
+    if radarr_api_key:
+        r_rad = await client.get(f"{seerr_url}/api/v1/settings/radarr", headers=headers)
+        if r_rad.status_code == 200 and len(r_rad.json()) == 0:
+            await client.post(
+                f"{seerr_url}/api/v1/settings/radarr",
+                headers=headers,
+                json={
+                    "name": "Radarr (Movies)",
+                    "hostname": "radarr",
+                    "port": 7878,
+                    "apiKey": radarr_api_key,
+                    "useSsl": False,
+                    "baseUrl": "",
+                    "activeProfileId": 1,
+                    "activeProfileName": "Any",
+                    "activeDirectory": "/data/media/movies",
+                    "is4k": False,
+                    "minimumAvailability": "released",
+                    "isDefault": True,
+                    "externalUrl": f"http://{nas_ip}:7878",
+                    "syncEnabled": True,
+                    "preventSearch": False,
+                },
+            )
+            logs.append("Seerr API: Radarr(/data/media/movies) 영화 서버 실시간 등록 완료")
+
+    # 4. Register Sonarr if not already present in live memory
+    if sonarr_api_key:
+        r_son = await client.get(f"{seerr_url}/api/v1/settings/sonarr", headers=headers)
+        if r_son.status_code == 200 and len(r_son.json()) == 0:
+            await client.post(
+                f"{seerr_url}/api/v1/settings/sonarr",
+                headers=headers,
+                json={
+                    "name": "Sonarr (TV & Anime)",
+                    "hostname": "sonarr",
+                    "port": 8989,
+                    "apiKey": sonarr_api_key,
+                    "useSsl": False,
+                    "baseUrl": "",
+                    "activeProfileId": 1,
+                    "activeProfileName": "Any",
+                    "activeDirectory": "/data/media/tv",
+                    "activeAnimeProfileId": 1,
+                    "activeAnimeProfileName": "Any",
+                    "activeAnimeDirectory": "/data/media/anime",
+                    "enableSeasonFolders": True,
+                    "is4k": False,
+                    "isDefault": True,
+                    "externalUrl": f"http://{nas_ip}:8989",
+                    "syncEnabled": True,
+                    "preventSearch": False,
+                },
+            )
+            logs.append("Seerr API: Sonarr(/data/media/tv, /data/media/anime) 드라마·애니 서버 실시간 등록 완료")
+
+    return logs
+
+
 async def auto_wire_all_services(
     docker_root: Path | None = None,
     sonarr_url: str = "http://sonarr:8989",
     radarr_url: str = "http://radarr:7878",
     prowlarr_url: str = "http://prowlarr:9696",
+    seerr_url: str = "http://seerr:5055",
 ) -> Dict[str, Any]:
     """Master Zero-Touch Auto-Wirer: configures files and calls Sonarr/Radarr/Prowlarr/Seerr APIs automatically."""
     mounts = get_mount_paths()
@@ -592,6 +706,20 @@ async def auto_wire_all_services(
                 completed_actions.extend(p_logs)
             except Exception as exc:
                 completed_actions.append(f"Prowlarr API 대기 중 ({exc})")
+
+        if d_root.exists():
+            try:
+                se_logs = await configure_seerr_via_api(
+                    client,
+                    seerr_url=seerr_url,
+                    docker_root=d_root,
+                    nas_ip=nas_ip,
+                    sonarr_api_key=creds["sonarr_api_key"],
+                    radarr_api_key=creds["radarr_api_key"],
+                )
+                completed_actions.extend(se_logs)
+            except Exception as exc:
+                completed_actions.append(f"Seerr API 대기 중 ({exc})")
 
     return {
         "status": "ok",
