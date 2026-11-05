@@ -158,6 +158,11 @@ def provision_bazarr_config(
     general["movie_default_enabled"] = True
     general["minimum_score_movie"] = 50
     general["minimum_score"] = 60
+    general["hi_extension"] = ""
+    general["use_postprocessing"] = True
+    general["postprocessing_cmd"] = (
+        '/lsiopy/bin/python3 /config/plex_sub_autofix.py "{{directory}}" "{{subtitles}}" "{{subtitles_language_code2}}"'
+    )
     general.setdefault(
         "enabled_providers",
         ["yifysubtitles", "supersubtitles", "subf2m", "podnapisi", "tvsubtitles", "gestdown", "animetosho"],
@@ -310,8 +315,9 @@ async def configure_sonarr_via_api(
     qbit_port: int = 8181,
     qbit_user: str = "admin",
     qbit_pass: str = "",
+    plex_token: str = "",
 ) -> List[str]:
-    """Configure Sonarr v4 Media Management, TRaSH Naming, Root Folders (/data/media/tv, anime), and qBittorrent."""
+    """Configure Sonarr v4 Media Management, TRaSH Naming, Root Folders (/data/media/tv, anime), qBittorrent, and Plex Notification."""
     logs: List[str] = []
     headers = {"X-Api-Key": api_key}
 
@@ -363,6 +369,32 @@ async def configure_sonarr_via_api(
             await client.post(f"{base_url}/api/v3/downloadclient?forceSave=true", headers=headers, json=payload)
             logs.append(f"Sonarr: qBittorrent({qbit_host}:{qbit_port}) 다운로드 클라이언트 자동 연결")
 
+    if plex_token:
+        r_nt = await client.get(f"{base_url}/api/v3/notification", headers=headers)
+        if r_nt.status_code == 200 and not any(n.get("implementation") == "PlexServer" for n in r_nt.json()):
+            nt_payload = {
+                "onGrab": False,
+                "onDownload": True,
+                "onUpgrade": True,
+                "onRename": True,
+                "onSeriesDelete": True,
+                "onEpisodeFileDelete": True,
+                "onEpisodeFileDeleteForUpgrade": True,
+                "name": "Plex Media Server",
+                "implementation": "PlexServer",
+                "configContract": "PlexServerSettings",
+                "fields": [
+                    {"name": "host", "value": "172.17.0.1"},
+                    {"name": "port", "value": 32400},
+                    {"name": "useSsl", "value": False},
+                    {"name": "authToken", "value": plex_token},
+                    {"name": "updateLibrary", "value": True},
+                ],
+                "tags": [],
+            }
+            await client.post(f"{base_url}/api/v3/notification?forceSave=true", headers=headers, json=nt_payload)
+            logs.append("Sonarr: 임포트 완료 시 Plex 라이브러리 실시간 자동 스캔(PlexServer Connect) 연결")
+
     return logs
 
 
@@ -374,8 +406,9 @@ async def configure_radarr_via_api(
     qbit_port: int = 8181,
     qbit_user: str = "admin",
     qbit_pass: str = "",
+    plex_token: str = "",
 ) -> List[str]:
-    """Configure Radarr v5 Media Management, TRaSH Naming, Root Folder (/data/media/movies), and qBittorrent."""
+    """Configure Radarr v5 Media Management, TRaSH Naming, Root Folder (/data/media/movies), qBittorrent, and Plex Notification."""
     logs: List[str] = []
     headers = {"X-Api-Key": api_key}
 
@@ -425,6 +458,32 @@ async def configure_radarr_via_api(
             }
             await client.post(f"{base_url}/api/v3/downloadclient?forceSave=true", headers=headers, json=payload)
             logs.append(f"Radarr: qBittorrent({qbit_host}:{qbit_port}) 다운로드 클라이언트 자동 연결")
+
+    if plex_token:
+        r_nt = await client.get(f"{base_url}/api/v3/notification", headers=headers)
+        if r_nt.status_code == 200 and not any(n.get("implementation") == "PlexServer" for n in r_nt.json()):
+            nt_payload = {
+                "onGrab": False,
+                "onDownload": True,
+                "onUpgrade": True,
+                "onRename": True,
+                "onMovieDelete": True,
+                "onMovieFileDelete": True,
+                "onMovieFileDeleteForUpgrade": True,
+                "name": "Plex Media Server",
+                "implementation": "PlexServer",
+                "configContract": "PlexServerSettings",
+                "fields": [
+                    {"name": "host", "value": "172.17.0.1"},
+                    {"name": "port", "value": 32400},
+                    {"name": "useSsl", "value": False},
+                    {"name": "authToken", "value": plex_token},
+                    {"name": "updateLibrary", "value": True},
+                ],
+                "tags": [],
+            }
+            await client.post(f"{base_url}/api/v3/notification?forceSave=true", headers=headers, json=nt_payload)
+            logs.append("Radarr: 임포트 완료 시 Plex 라이브러리 실시간 자동 스캔(PlexServer Connect) 연결")
 
     return logs
 
@@ -693,6 +752,7 @@ async def auto_wire_all_services(
                     qbit_port=qbit_port,
                     qbit_user=qbit_user,
                     qbit_pass=qbit_pass,
+                    plex_token=creds["plex_token"],
                 )
                 completed_actions.extend(s_logs)
             except Exception as exc:
@@ -707,6 +767,7 @@ async def auto_wire_all_services(
                     qbit_port=qbit_port,
                     qbit_user=qbit_user,
                     qbit_pass=qbit_pass,
+                    plex_token=creds["plex_token"],
                 )
                 completed_actions.extend(r_logs)
             except Exception as exc:
