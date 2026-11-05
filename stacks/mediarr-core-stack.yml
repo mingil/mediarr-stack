@@ -1,8 +1,8 @@
 # =============================================================================
-# 🎬 ULTIMATE SYNOLOGY MEDIA & *ARR AUTOMATION STACK (mediarr-stack)
+# 🎬 ULTIMATE SYNOLOGY MEDIA & *ARR AUTOMATION STACK (mediarr-stack v1.3.0)
 # =============================================================================
 # • 프로젝트명   : mediarr-stack (단일 프로젝트 & 단일 docker-compose.yml 통합 아키텍처)
-# • 통합 이미지  : kimmingil/mediarr-stack:latest (자동 초기화 · 실시간 관제 · 24h 자동 DB 최적화)
+# • 통합 이미지  : kimmingil/mediarr-stack:latest (폴더/권한 자동 초기화 · API키 자동 연동 · 24h DB 최적화)
 # • 업데이트 관리: 기존 운영 중인 Watchtower 컨테이너 100% 호환 라벨(enable=true & depends-on) 내장
 # • 하드링크 규격: TRaSH Guides 단일 볼륨(/volume1/mediarr:/data) 0.1초 하드링크 완벽 지원
 # • 기존 호환성  : 기존 PlexHW(/volume1/docker/plexhw) & qBittorrent(:8181) 설정 100% 무손실 승계
@@ -26,7 +26,7 @@ x-logging: &default-logging
 
 services:
   # ---------------------------------------------------------------------------
-  # 🎛️ 0. MEDIARR CONTROL CENTER - 통합 관제 · 폴더/설정 자동 초기화 · 24h 자동 DB 닥터
+  # 🎛️ 0. MEDIARR CONTROL CENTER - 폴더/권한(1026:100) 초기화 · API키 자동 브리지 · 24h DB 닥터
   # ---------------------------------------------------------------------------
   mediarr-control-center:
     image: kimmingil/mediarr-stack:latest
@@ -55,6 +55,7 @@ services:
       NAS_IP: ${NAS_IP:-192.168.0.100}
       SONARR_API_KEY: ${SONARR_API_KEY:-}
       RADARR_API_KEY: ${RADARR_API_KEY:-}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
     ports:
       - "8500:8500"
     volumes:
@@ -65,7 +66,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 10s
     restart: on-failure:5
     logging: *default-logging
 
@@ -78,6 +79,9 @@ services:
     hostname: gluetun
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      mediarr-control-center:
+        condition: service_healthy
     networks:
       mediarr_net:
         aliases:
@@ -135,10 +139,12 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "com.centurylinklabs.watchtower.depends-on=mediarr-gluetun"
-    network_mode: "service:gluetun"
     depends_on:
+      mediarr-control-center:
+        condition: service_healthy
       gluetun:
         condition: service_healthy
+    network_mode: "service:gluetun"
     mem_limit: 2g
     security_opt:
       - no-new-privileges:true
@@ -170,6 +176,9 @@ services:
     hostname: plex
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      mediarr-control-center:
+        condition: service_healthy
     network_mode: host
     mem_limit: 4g
     cpu_shares: 1024
@@ -213,6 +222,10 @@ services:
     hostname: seerr
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      mediarr-control-center:
+        condition: service_healthy
+    user: "${PUID:-1026}:${PGID:-100}"
     networks:
       mediarr_net:
         aliases:
@@ -236,7 +249,7 @@ services:
       LOG_LEVEL: info
       PORT: 5055
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5055/api/v1/status >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5055/api/v1/status >/dev/null 2>&1 || nc -z 127.0.0.1 5055 >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -253,10 +266,12 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "com.centurylinklabs.watchtower.depends-on=mediarr-gluetun"
-    network_mode: "service:gluetun"
     depends_on:
+      mediarr-control-center:
+        condition: service_healthy
       gluetun:
         condition: service_healthy
+    network_mode: "service:gluetun"
     mem_limit: 1g
     security_opt:
       - no-new-privileges:true
@@ -284,10 +299,12 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "com.centurylinklabs.watchtower.depends-on=mediarr-gluetun"
-    network_mode: "service:gluetun"
     depends_on:
+      mediarr-control-center:
+        condition: service_healthy
       gluetun:
         condition: service_healthy
+    network_mode: "service:gluetun"
     mem_limit: 1g
     security_opt:
       - no-new-privileges:true
@@ -297,7 +314,7 @@ services:
       LOG_HTML: "false"
       CAPTCHA_SOLVER: none
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:8191/ >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8191/health\")' >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8191/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -314,6 +331,9 @@ services:
     hostname: sonarr
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      mediarr-control-center:
+        condition: service_healthy
     networks:
       mediarr_net:
         aliases:
@@ -352,6 +372,9 @@ services:
     hostname: radarr
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      mediarr-control-center:
+        condition: service_healthy
     networks:
       mediarr_net:
         aliases:
@@ -390,6 +413,9 @@ services:
     hostname: bazarr
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      mediarr-control-center:
+        condition: service_healthy
     networks:
       mediarr_net:
         aliases:

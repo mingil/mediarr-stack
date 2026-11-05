@@ -55,7 +55,6 @@ def _normalize_selected(cfg: MediarrStackConfigRequest) -> List[str]:
         selected.insert(idx, "gluetun")
     if not cfg.use_vpn and "gluetun" in selected:
         selected.remove("gluetun")
-    # Never add a duplicate watchtower container inside this compose
     if "watchtower" in selected:
         selected.remove("watchtower")
     return selected
@@ -74,14 +73,33 @@ def _wt_labels(enabled: bool, depends_on_gluetun: bool = False) -> List[str]:
     return out
 
 
+def _depends_on_block(has_control_center: bool, need_gluetun: bool = False) -> List[str]:
+    """Ensure mediarr-control-center finishes folder & permission provisioning before other containers start."""
+    if not has_control_center and not need_gluetun:
+        return []
+    out = ["    depends_on:"]
+    if has_control_center:
+        out.extend([
+            "      mediarr-control-center:",
+            "        condition: service_healthy",
+        ])
+    if need_gluetun:
+        out.extend([
+            "      gluetun:",
+            "        condition: service_healthy",
+        ])
+    return out
+
+
 def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
-    """Generate unified single-project docker-compose.yml for mediarr-stack (compatible with existing Watchtower)."""
+    """Generate unified single-project docker-compose.yml for mediarr-stack (verified for Synology DSM 7.2)."""
     selected = _normalize_selected(cfg)
     docker_root = cfg.docker_root.rstrip("/")
     data_root = cfg.data_root.rstrip("/")
     legacy_torrents = cfg.legacy_torrents_root.rstrip("/")
     legacy_video = cfg.legacy_video_root.rstrip("/")
     vpn_active = cfg.use_vpn and ("gluetun" in selected)
+    has_cc = "mediarr-control-center" in selected
     qbit_port = cfg.qbit_webui_port
     wt = cfg.enable_watchtower_labels
 
@@ -89,10 +107,10 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
 
     lines: List[str] = [
         "# =============================================================================",
-        "# 🎬 ULTIMATE SYNOLOGY MEDIA & *ARR AUTOMATION STACK (mediarr-stack)",
+        "# 🎬 ULTIMATE SYNOLOGY MEDIA & *ARR AUTOMATION STACK (mediarr-stack v1.3.0)",
         "# =============================================================================",
         "# • 프로젝트명   : mediarr-stack (단일 프로젝트 & 단일 docker-compose.yml 통합 아키텍처)",
-        "# • 통합 이미지  : kimmingil/mediarr-stack:latest (자동 초기화 · 실시간 관제 · 24h 자동 DB 최적화)",
+        "# • 통합 이미지  : kimmingil/mediarr-stack:latest (폴더/권한 자동 초기화 · API키 자동 연동 · 24h DB 최적화)",
         "# • 업데이트 관리: 기존 운영 중인 Watchtower 컨테이너 100% 호환 라벨(enable=true & depends-on) 내장",
         "# • 하드링크 규격: TRaSH Guides 단일 볼륨(/volume1/mediarr:/data) 0.1초 하드링크 완벽 지원",
         "# • 기존 호환성  : 기존 PlexHW(/volume1/docker/plexhw) & qBittorrent(:8181) 설정 100% 무손실 승계",
@@ -118,10 +136,10 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
     ]
 
     # 0. MEDIARR CONTROL CENTER
-    if "mediarr-control-center" in selected:
+    if has_cc:
         lines.extend([
             "  # ---------------------------------------------------------------------------",
-            "  # 🎛️ 0. MEDIARR CONTROL CENTER - 통합 관제 · 폴더/설정 자동 초기화 · 24h 자동 DB 닥터",
+            "  # 🎛️ 0. MEDIARR CONTROL CENTER - 폴더/권한(1026:100) 초기화 · API키 자동 브리지 · 24h DB 닥터",
             "  # ---------------------------------------------------------------------------",
             "  mediarr-control-center:",
             "    image: kimmingil/mediarr-stack:latest",
@@ -149,6 +167,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             f"      NAS_IP: ${{NAS_IP:-{cfg.nas_ip}}}",
             "      SONARR_API_KEY: ${SONARR_API_KEY:-}",
             "      RADARR_API_KEY: ${RADARR_API_KEY:-}",
+            "      TMDB_API_KEY: ${TMDB_API_KEY:-}",
             "    ports:",
             '      - "8500:8500"',
             "    volumes:",
@@ -159,7 +178,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "      interval: 30s",
             "      timeout: 10s",
             "      retries: 3",
-            "      start_period: 15s",
+            "      start_period: 10s",
             "    restart: on-failure:5",
             "    logging: *default-logging",
             "",
@@ -206,6 +225,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-gluetun",
             "    hostname: gluetun",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -252,14 +272,10 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: lscr.io/linuxserver/qbittorrent:latest",
             "    container_name: mediarr-qbittorrent",
             *_wt_labels(wt, depends_on_gluetun=vpn_active),
+            *_depends_on_block(has_cc, need_gluetun=vpn_active),
         ])
         if vpn_active:
-            lines.extend([
-                '    network_mode: "service:gluetun"',
-                "    depends_on:",
-                "      gluetun:",
-                "        condition: service_healthy",
-            ])
+            lines.append('    network_mode: "service:gluetun"')
         else:
             lines.extend([
                 "    hostname: qbittorrent",
@@ -310,6 +326,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-plex",
             "    hostname: plex",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    network_mode: host",
             "    mem_limit: 4g",
             "    cpu_shares: 1024",
@@ -372,6 +389,8 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-seerr",
             "    hostname: seerr",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
+            "    user: " + f'"${{PUID:-{cfg.puid}}}:${{PGID:-{cfg.pgid}}}"',
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -395,7 +414,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "      LOG_LEVEL: info",
             "      PORT: 5055",
             "    healthcheck:",
-            '      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5055/api/v1/status >/dev/null 2>&1 || exit 1"]',
+            '      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5055/api/v1/status >/dev/null 2>&1 || nc -z 127.0.0.1 5055 >/dev/null 2>&1 || exit 1"]',
             "      interval: 30s",
             "      timeout: 10s",
             "      retries: 5",
@@ -416,14 +435,10 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: lscr.io/linuxserver/prowlarr:latest",
             "    container_name: mediarr-prowlarr",
             *_wt_labels(wt, depends_on_gluetun=prowlarr_vpn),
+            *_depends_on_block(has_cc, need_gluetun=prowlarr_vpn),
         ])
         if prowlarr_vpn:
-            lines.extend([
-                '    network_mode: "service:gluetun"',
-                "    depends_on:",
-                "      gluetun:",
-                "        condition: service_healthy",
-            ])
+            lines.append('    network_mode: "service:gluetun"')
         else:
             lines.extend([
                 "    hostname: prowlarr",
@@ -467,14 +482,10 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: ghcr.io/flaresolverr/flaresolverr:latest",
             "    container_name: mediarr-flaresolverr",
             *_wt_labels(wt, depends_on_gluetun=flare_vpn),
+            *_depends_on_block(has_cc, need_gluetun=flare_vpn),
         ])
         if flare_vpn:
-            lines.extend([
-                '    network_mode: "service:gluetun"',
-                "    depends_on:",
-                "      gluetun:",
-                "        condition: service_healthy",
-            ])
+            lines.append('    network_mode: "service:gluetun"')
         else:
             lines.extend([
                 "    hostname: flaresolverr",
@@ -496,7 +507,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             '      LOG_HTML: "false"',
             "      CAPTCHA_SOLVER: none",
             "    healthcheck:",
-            '      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:8191/ >/dev/null 2>&1 || exit 1"]',
+            '      test: ["CMD-SHELL", "python3 -c \'import urllib.request; urllib.request.urlopen(\\"http://127.0.0.1:8191/health\\")\' >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8191/health >/dev/null 2>&1 || exit 1"]',
             "      interval: 30s",
             "      timeout: 10s",
             "      retries: 5",
@@ -517,6 +528,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-sonarr",
             "    hostname: sonarr",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -559,6 +571,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-radarr",
             "    hostname: radarr",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -601,6 +614,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-bazarr",
             "    hostname: bazarr",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -640,12 +654,13 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-recyclarr",
             "    hostname: recyclarr",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
             "          - recyclarr",
             "          - mediarr-recyclarr",
-            "    user: " + f'"{cfg.puid}:{cfg.pgid}"',
+            "    user: " + f'"${{PUID:-{cfg.puid}}}:${{PGID:-{cfg.pgid}}}"',
             "    mem_limit: 512m",
             "    security_opt:",
             "      - no-new-privileges:true",
@@ -672,12 +687,13 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-unpackerr",
             "    hostname: unpackerr",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
             "          - unpackerr",
             "          - mediarr-unpackerr",
-            "    user: " + f'"{cfg.puid}:{cfg.pgid}"',
+            "    user: " + f'"${{PUID:-{cfg.puid}}}:${{PGID:-{cfg.pgid}}}"',
             "    mem_limit: 512m",
             "    security_opt:",
             "      - no-new-privileges:true",
@@ -687,12 +703,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             f"      - {legacy_torrents}:/downloads:rw",
             "    environment:",
             f"      TZ: ${{TZ:-{cfg.tz}}}",
-            "      UN_SONARR_0_URL: http://sonarr:8989",
-            "      UN_SONARR_0_API_KEY: ${SONARR_API_KEY:-}",
-            "      UN_SONARR_0_PATHS_0: /data/torrents",
-            "      UN_RADARR_0_URL: http://radarr:7878",
-            "      UN_RADARR_0_API_KEY: ${RADARR_API_KEY:-}",
-            "      UN_RADARR_0_PATHS_0: /data/torrents",
+            "      UN_CONFIG_FILEPATH: /config/unpackerr.conf",
             "    restart: on-failure:5",
             "    logging: *default-logging",
             "",
@@ -709,6 +720,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-tautulli",
             "    hostname: tautulli",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -749,6 +761,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-kometa",
             "    hostname: kometa",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -756,7 +769,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "          - mediarr-kometa",
             "    extra_hosts:",
             '      - "host.docker.internal:host-gateway"',
-            "    user: " + f'"{cfg.puid}:{cfg.pgid}"',
+            "    user: " + f'"${{PUID:-{cfg.puid}}}:${{PGID:-{cfg.pgid}}}"',
             "    mem_limit: 1g",
             "    security_opt:",
             "      - no-new-privileges:true",
@@ -766,6 +779,9 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             f"      TZ: ${{TZ:-{cfg.tz}}}",
             '      KOMETA_TIME: "04:00"',
             '      KOMETA_RUN: "false"',
+            '    entrypoint: ["/bin/sh", "-c"]',
+            "    command:",
+            '      - "while grep -q \'YOUR_TMDB_API_KEY\' /config/config.yml 2>/dev/null; do sleep 300; done; exec python3 /kometa.py"',
             "    restart: on-failure:5",
             "    logging: *default-logging",
             "",
@@ -782,6 +798,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    container_name: mediarr-maintainerr",
             "    hostname: maintainerr",
             *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -789,7 +806,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "          - mediarr-maintainerr",
             "    extra_hosts:",
             '      - "host.docker.internal:host-gateway"',
-            "    user: " + f'"{cfg.puid}:{cfg.pgid}"',
+            "    user: " + f'"${{PUID:-{cfg.puid}}}:${{PGID:-{cfg.pgid}}}"',
             "    mem_limit: 512m",
             "    security_opt:",
             "      - no-new-privileges:true",
@@ -807,17 +824,20 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def generate_recyclarr_config() -> str:
-    """Generate TRaSH Guides best-practice recyclarr.yml for Sonarr v4 & Radarr v5."""
-    return """# =============================================================================
+def generate_recyclarr_config(sonarr_api_key: str = "", radarr_api_key: str = "") -> str:
+    """Generate TRaSH Guides best-practice recyclarr.yml (auto-activates when API keys are discovered)."""
+    s_key = sonarr_api_key or "!env_var SONARR_API_KEY"
+    r_key = radarr_api_key or "!env_var RADARR_API_KEY"
+
+    return f"""# =============================================================================
 # ♻️ TRaSH GUIDES 공식 표준 화질 프로필 & 한국어 우대 자동 동기화 (recyclarr.yml)
-# 저장 위치: /volume1/docker/recyclarr/recyclarr.yml (mediarr-control-center 자동 생성)
+# 저장 위치: /volume1/docker/recyclarr/recyclarr.yml (mediarr-control-center 자동 생성·갱신)
 # =============================================================================
 
 sonarr:
   series_tv_anime:
     base_url: http://sonarr:8989
-    api_key: !env_var SONARR_API_KEY
+    api_key: {s_key}
 
     delete_old_custom_formats: true
     replace_existing_custom_formats: true
@@ -845,7 +865,7 @@ sonarr:
 radarr:
   uhd_hd_movies:
     base_url: http://radarr:7878
-    api_key: !env_var RADARR_API_KEY
+    api_key: {r_key}
 
     delete_old_custom_formats: true
     replace_existing_custom_formats: true
@@ -870,8 +890,77 @@ radarr:
 """
 
 
-def generate_kometa_config(cfg: MediarrStackConfigRequest) -> str:
+def generate_unpackerr_config(sonarr_api_key: str = "", radarr_api_key: str = "") -> str:
+    """Generate unpackerr.conf (cleanly comments out services until API keys are auto-discovered)."""
+    lines = [
+        "# =============================================================================",
+        "# 📦 UNPACKERR 자동 압축 해제 설정 (mediarr-control-center가 API 키 자동 주입)",
+        "# =============================================================================",
+        'debug = false',
+        'quiet = false',
+        'activity = false',
+        'interval = "2m"',
+        'start_delay = "1m"',
+        'retry_delay = "5m"',
+        'max_retries = 3',
+        'parallel = 1',
+        'file_mode = "0664"',
+        'dir_mode = "0775"',
+        "",
+    ]
+    if sonarr_api_key:
+        lines.extend([
+            "[[sonarr]]",
+            '  url = "http://sonarr:8989"',
+            f'  api_key = "{sonarr_api_key}"',
+            '  paths = ["/data/torrents", "/downloads"]',
+            '  protocols = "torrent"',
+            '  timeout = "10s"',
+            '  delete_orig = false',
+            "",
+        ])
+    else:
+        lines.extend([
+            "# Sonarr 첫 부팅 후 config.xml이 생성되면 mediarr-control-center가 자동으로 활성화합니다.",
+            "# [[sonarr]]",
+            '#   url = "http://sonarr:8989"',
+            '#   api_key = ""',
+            '#   paths = ["/data/torrents", "/downloads"]',
+            "",
+        ])
+
+    if radarr_api_key:
+        lines.extend([
+            "[[radarr]]",
+            '  url = "http://radarr:7878"',
+            f'  api_key = "{radarr_api_key}"',
+            '  paths = ["/data/torrents", "/downloads"]',
+            '  protocols = "torrent"',
+            '  timeout = "10s"',
+            '  delete_orig = false',
+            "",
+        ])
+    else:
+        lines.extend([
+            "# Radarr 첫 부팅 후 config.xml이 생성되면 mediarr-control-center가 자동으로 활성화합니다.",
+            "# [[radarr]]",
+            '#   url = "http://radarr:7878"',
+            '#   api_key = ""',
+            '#   paths = ["/data/torrents", "/downloads"]',
+            "",
+        ])
+
+    return "\n".join(lines)
+
+
+def generate_kometa_config(
+    cfg: MediarrStackConfigRequest,
+    plex_token: str = "",
+    tmdb_api_key: str = "",
+) -> str:
     """Generate starter Kometa config.yml for 4K/HDR/Rating overlays."""
+    p_tok = plex_token or "YOUR_PLEX_TOKEN"
+    t_key = tmdb_api_key or "YOUR_TMDB_API_KEY"
     return f"""# =============================================================================
 # 🎨 KOMETA (Plex Meta Manager) 포스터 4K·HDR·평점 배지 자동화 템플릿
 # 저장 위치: /volume1/docker/kometa/config.yml (mediarr-control-center 자동 생성)
@@ -900,14 +989,14 @@ libraries:
 
 plex:
   url: http://{cfg.nas_ip}:32400
-  token: YOUR_PLEX_TOKEN
+  token: {p_tok}
   timeout: 60
   clean_bundles: true
   empty_trash: true
   optimize: true
 
 tmdb:
-  apikey: YOUR_TMDB_API_KEY
+  apikey: {t_key}
   language: ko
   region: KR
 """
@@ -920,7 +1009,6 @@ def generate_synology_init_script(cfg: MediarrStackConfigRequest) -> str:
     return f"""#!/bin/bash
 # =============================================================================
 # 🚀 시놀로지 NAS (DS920+) MEDIARR-STACK 원클릭 폴더 & 권한 초기화 스크립트
-# 실행 방법: 시놀로지 [제어판] -> [작업 스케줄러] -> [사용자 정의 스크립트(root)] 1회 실행
 # (참고: mediarr-control-center 컨테이너가 부팅 시에도 자동으로 동일 작업을 수행합니다!)
 # =============================================================================
 
@@ -951,7 +1039,7 @@ echo "✅ MEDIARR-STACK 시놀로지 폴더 및 하드링크 권한 세팅이 10
 
 
 def generate_maintenance_doctor_script(cfg: MediarrStackConfigRequest) -> str:
-    """Generate optional manual maintenance script (while Watchtower + Control Center handle everything automatically)."""
+    """Generate optional manual maintenance script."""
     docker_root = cfg.docker_root.rstrip("/")
     return f"""#!/bin/bash
 # =============================================================================
@@ -1012,10 +1100,11 @@ TAUTULLI_PORT=8182
 MAINTAINERR_PORT=6246
 CONTROL_CENTER_PORT=8500
 
-# Plex & *Arr API 연동 키
+# Plex & *Arr API 연동 키 (비워두셔도 mediarr-control-center가 config.xml에서 자동 감지합니다)
 PLEX_CLAIM={cfg.plex_claim}
-SONARR_API_KEY=YOUR_SONARR_API_KEY
-RADARR_API_KEY=YOUR_RADARR_API_KEY
+SONARR_API_KEY=
+RADARR_API_KEY=
+TMDB_API_KEY=
 """
 
 
@@ -1056,7 +1145,7 @@ def generate_wiring_guide(cfg: MediarrStackConfigRequest) -> List[Dict[str, Any]
                 "Sonarr -> Settings -> Media Management -> Root Folders에 /data/media/tv 와 /data/media/anime 추가",
                 "Radarr -> Settings -> Media Management -> Root Folders에 /data/media/movies 추가",
                 f"Settings -> Download Clients -> (+) qBittorrent 추가: Host에 qbittorrent, Port에 {qbit_port} 입력 (Category: tv / movies)",
-                "Settings -> General -> Security에서 API Key를 복사해 .env 파일에 넣으면 Recyclarr(화질 최적화)와 Unpackerr(압축 해제)가 즉시 자동 작동합니다.",
+                "Sonarr/Radarr가 첫 부팅을 마치면 mediarr-control-center가 config.xml에서 API 키를 자동으로 읽어 Recyclarr와 Unpackerr에 자동 연결합니다!",
             ],
         },
         {
@@ -1076,7 +1165,7 @@ def generate_wiring_guide(cfg: MediarrStackConfigRequest) -> List[Dict[str, Any]
             "external_url": f"Plex: http://{cfg.nas_ip}:32400/web | Seerr: http://{cfg.nas_ip}:5055",
             "internal_address": f"Plex: http://host.docker.internal:32400 (또는 http://{cfg.nas_ip}:32400) | Seerr: http://seerr:5055",
             "key_settings": [
-                "기존 /volume1/docker/plexhw 데이터와 /volume1/video, /volume1/mediarr/media 폴더가 100% 그대로 연결됩니다.",
+                "기존 /volume1/docker/plexhw 데이터(6.7GB)가 자동으로 제자리(/volume1/docker/plexhw/Library)에 복원 및 연결됩니다.",
                 "Plex 설정 -> Transcoder 에서 '트랜스코더 임시 디렉토리'에 /transcode 를 입력하면 2GB RAM 디스크 트랜스코딩이 작동하여 SSD/HDD 수명 소모가 0이 됩니다.",
                 "Seerr(:5055)에 접속해 Plex 계정으로 로그인 후 Sonarr(hostname: sonarr, port: 8989)와 Radarr(hostname: radarr, port: 7878)를 연동하면 모든 구축이 완성됩니다!",
             ],

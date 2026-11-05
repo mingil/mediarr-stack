@@ -30,6 +30,7 @@ from app.mediarr_generator import (
     generate_mediarr_compose,
     generate_recyclarr_config,
     generate_synology_init_script,
+    generate_unpackerr_config,
     generate_wiring_guide,
 )
 from app.runtime_manager import (
@@ -44,11 +45,19 @@ LEGACY_DIR = BASE_DIR / "legacy-backup"
 
 
 async def _periodic_maintenance_loop(interval_hours: float) -> None:
-    """Background loop inside mediarr-control-center that runs DB optimization & backup every N hours."""
+    """Background loop inside mediarr-control-center: syncs API keys 60s after boot, then runs 24h DB optimization."""
+    # First pass after 60s to auto-bridge Sonarr/Radarr API keys generated during initial container boot
+    await asyncio.sleep(60.0)
+    try:
+        await asyncio.to_thread(bootstrap_host_environment)
+    except Exception:
+        pass
+
     sleep_seconds = max(3600.0, interval_hours * 3600.0)
     while True:
         await asyncio.sleep(sleep_seconds)
         try:
+            await asyncio.to_thread(bootstrap_host_environment)
             await asyncio.to_thread(run_sqlite_maintenance_and_backup)
         except Exception:
             pass
@@ -263,6 +272,7 @@ async def download_bundle(cfg: MediarrStackConfigRequest) -> StreamingResponse:
     """Download a complete ZIP package containing all Mediarr Stack files and maintenance scripts."""
     compose_yaml = generate_mediarr_compose(cfg)
     recyclarr_yml = generate_recyclarr_config()
+    unpackerr_conf = generate_unpackerr_config()
     kometa_yml = generate_kometa_config(cfg)
     init_script = generate_synology_init_script(cfg)
     doctor_script = generate_maintenance_doctor_script(cfg)
@@ -274,6 +284,7 @@ async def download_bundle(cfg: MediarrStackConfigRequest) -> StreamingResponse:
         zf.writestr("compose.yaml", compose_yaml)
         zf.writestr(".env.example", env_template)
         zf.writestr("recyclarr/recyclarr.yml", recyclarr_yml)
+        zf.writestr("unpackerr/unpackerr.conf", unpackerr_conf)
         zf.writestr("kometa/config.yml", kometa_yml)
         zf.writestr("synology-mediarr-init.sh", init_script)
         zf.writestr("mediarr-maintenance-doctor.sh", doctor_script)

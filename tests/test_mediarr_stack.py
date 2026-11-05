@@ -66,7 +66,6 @@ def test_generate_full_compose_organic_integration():
     payload = res.json()
     compose_str = payload["docker_compose"]
 
-    # Ensure no marius anywhere and no duplicate watchtower service container
     assert "marius" not in compose_str.lower()
 
     parsed = yaml.safe_load(compose_str)
@@ -79,8 +78,12 @@ def test_generate_full_compose_organic_integration():
     # Verify Watchtower labels on all services and depends-on=mediarr-gluetun on VPN-routed services
     for svc_name, svc_def in services.items():
         assert "com.centurylinklabs.watchtower.enable=true" in svc_def.get("labels", []), f"Missing watchtower label on {svc_name}"
+        if svc_name != "mediarr-control-center":
+            assert "mediarr-control-center" in svc_def.get("depends_on", {}), f"Missing boot dependency on {svc_name}"
+
     for vpn_svc in ["qbittorrent", "prowlarr", "flaresolverr"]:
         assert "com.centurylinklabs.watchtower.depends-on=mediarr-gluetun" in services[vpn_svc]["labels"]
+        assert "gluetun" in services[vpn_svc]["depends_on"]
 
     # Verify Gluetun firewall subnets, healthcheck, and aliases
     gluetun = services["gluetun"]
@@ -106,24 +109,49 @@ def test_generate_full_compose_organic_integration():
     assert any("/transcode:size=2G" in t for t in plex["tmpfs"])
 
 
-def test_runtime_bootstrap_and_sqlite_maintenance(tmp_path: Path):
+def test_runtime_bootstrap_auto_apikey_bridge_and_sqlite_maintenance(tmp_path: Path):
     docker_root = tmp_path / "docker"
     data_root = tmp_path / "mediarr"
     docker_root.mkdir()
     data_root.mkdir()
 
-    # Create a fake stale Plex PID file
-    pid_dir = docker_root / "plexhw/Library/Application Support/Plex Media Server"
-    pid_dir.mkdir(parents=True)
-    stale_pid = pid_dir / "plexmediaserver.pid"
+    # Simulate relocated plexhw/Library inside mediarr-stack/plexhw/Library
+    relocated_lib = docker_root / "mediarr-stack/plexhw/Library/Application Support/Plex Media Server"
+    relocated_lib.mkdir(parents=True)
+    stale_pid = relocated_lib / "plexmediaserver.pid"
     stale_pid.write_text("12345", encoding="utf-8")
+    (relocated_lib / "Preferences.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><Preferences PlexOnlineToken="TEST_PLEX_TOKEN_123"/>',
+        encoding="utf-8",
+    )
+
+    # Simulate Sonarr & Radarr config.xml with auto-generated API keys
+    (docker_root / "sonarr").mkdir(parents=True)
+    (docker_root / "sonarr/config.xml").write_text("<Config><ApiKey>SONARR_AUTO_KEY_999</ApiKey></Config>", encoding="utf-8")
+    (docker_root / "radarr").mkdir(parents=True)
+    (docker_root / "radarr/config.xml").write_text("<Config><ApiKey>RADARR_AUTO_KEY_888</ApiKey></Config>", encoding="utf-8")
 
     # Run bootstrap
     boot_res = bootstrap_host_environment(docker_root=docker_root, data_root=data_root)
     assert boot_res["executed"] is True
-    assert not stale_pid.exists()
-    assert (docker_root / "recyclarr/recyclarr.yml").exists()
-    assert (docker_root / "kometa/config.yml").exists()
+
+    # Verify Library was auto-restored to docker_root / "plexhw/Library" and stale PID removed
+    restored_pms = docker_root / "plexhw/Library/Application Support/Plex Media Server"
+    assert restored_pms.is_dir()
+    assert not (restored_pms / "plexmediaserver.pid").exists()
+
+    # Verify auto-bridged API keys in recyclarr.yml, unpackerr.conf, and kometa/config.yml
+    recyclarr_txt = (docker_root / "recyclarr/recyclarr.yml").read_text(encoding="utf-8")
+    assert "SONARR_AUTO_KEY_999" in recyclarr_txt
+    assert "RADARR_AUTO_KEY_888" in recyclarr_txt
+
+    unpackerr_txt = (docker_root / "unpackerr/unpackerr.conf").read_text(encoding="utf-8")
+    assert "SONARR_AUTO_KEY_999" in unpackerr_txt
+    assert "RADARR_AUTO_KEY_888" in unpackerr_txt
+
+    kometa_txt = (docker_root / "kometa/config.yml").read_text(encoding="utf-8")
+    assert "TEST_PLEX_TOKEN_123" in kometa_txt
+
     assert (data_root / "torrents/movies").is_dir()
     assert (data_root / "media/anime").is_dir()
 
@@ -150,6 +178,7 @@ def test_download_bundle_zip():
     assert "compose.yaml" in names
     assert ".env.example" in names
     assert "recyclarr/recyclarr.yml" in names
+    assert "unpackerr/unpackerr.conf" in names
     assert "kometa/config.yml" in names
     assert "synology-mediarr-init.sh" in names
     assert "mediarr-maintenance-doctor.sh" in names

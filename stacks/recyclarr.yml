@@ -1,6 +1,6 @@
 # =============================================================================
 # ♻️ TRaSH GUIDES 공식 표준 화질 프로필 & 한국어 우대 자동 동기화 (recyclarr.yml)
-# 저장 위치: /volume1/docker/recyclarr/recyclarr.yml (mediarr-control-center 자동 생성)
+# 저장 위치: /volume1/docker/recyclarr/recyclarr.yml (mediarr-control-center 자동 생성·갱신)
 # =============================================================================
 
 sonarr:
