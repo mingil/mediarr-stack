@@ -18,6 +18,10 @@ class MediarrStackConfigRequest(BaseModel):
     vpn_provider: str = Field(default="surfshark", description="VPN 서비스 제공자 ID (surfshark 기본)")
     route_prowlarr_vpn: bool = Field(default=True, description="기존 구성처럼 Prowlarr/FlareSolverr도 VPN 내부로 라우팅할지 여부")
     enable_hw_transcoding: bool = Field(default=True, description="Plex Intel QuickSync (/dev/dri) + RAM 트랜스코딩 활성화")
+    enable_watchtower_labels: bool = Field(
+        default=True,
+        description="기존 운영 중인 외부 Watchtower 컨테이너가 자동 업데이트하도록 com.centurylinklabs.watchtower.* 라벨 부여",
+    )
     qbit_webui_port: int = Field(default=8181, description="qBittorrent Web UI 포트 (기존 8181 유지)")
     plex_claim: str = Field(default="", description="Plex Claim 토큰 (선택)")
     seerr_variant: str = Field(default="jellyseerr", description="seerr 이미지 선택 (jellyseerr 또는 overseerr)")
@@ -51,14 +55,27 @@ def _normalize_selected(cfg: MediarrStackConfigRequest) -> List[str]:
         selected.insert(idx, "gluetun")
     if not cfg.use_vpn and "gluetun" in selected:
         selected.remove("gluetun")
-    # Never allow watchtower
+    # Never add a duplicate watchtower container inside this compose
     if "watchtower" in selected:
         selected.remove("watchtower")
     return selected
 
 
+def _wt_labels(enabled: bool, depends_on_gluetun: bool = False) -> List[str]:
+    """Generate Watchtower labels for seamless integration with existing host Watchtower container."""
+    if not enabled:
+        return []
+    out = [
+        "    labels:",
+        '      - "com.centurylinklabs.watchtower.enable=true"',
+    ]
+    if depends_on_gluetun:
+        out.append('      - "com.centurylinklabs.watchtower.depends-on=mediarr-gluetun"')
+    return out
+
+
 def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
-    """Generate unified single-project docker-compose.yml for mediarr-stack (Watchtower-free)."""
+    """Generate unified single-project docker-compose.yml for mediarr-stack (compatible with existing Watchtower)."""
     selected = _normalize_selected(cfg)
     docker_root = cfg.docker_root.rstrip("/")
     data_root = cfg.data_root.rstrip("/")
@@ -66,6 +83,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
     legacy_video = cfg.legacy_video_root.rstrip("/")
     vpn_active = cfg.use_vpn and ("gluetun" in selected)
     qbit_port = cfg.qbit_webui_port
+    wt = cfg.enable_watchtower_labels
 
     vpn_info = next((v for v in VPN_PROVIDERS if v["id"] == cfg.vpn_provider), VPN_PROVIDERS[0])
 
@@ -74,7 +92,8 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
         "# 🎬 ULTIMATE SYNOLOGY MEDIA & *ARR AUTOMATION STACK (mediarr-stack)",
         "# =============================================================================",
         "# • 프로젝트명   : mediarr-stack (단일 프로젝트 & 단일 docker-compose.yml 통합 아키텍처)",
-        "# • 통합 이미지  : kimmingil/mediarr-stack:latest (자동 초기화 · 실시간 관제 · DB 최적화 내장)",
+        "# • 통합 이미지  : kimmingil/mediarr-stack:latest (자동 초기화 · 실시간 관제 · 24h 자동 DB 최적화)",
+        "# • 업데이트 관리: 기존 운영 중인 Watchtower 컨테이너 100% 호환 라벨(enable=true & depends-on) 내장",
         "# • 하드링크 규격: TRaSH Guides 단일 볼륨(/volume1/mediarr:/data) 0.1초 하드링크 완벽 지원",
         "# • 기존 호환성  : 기존 PlexHW(/volume1/docker/plexhw) & qBittorrent(:8181) 설정 100% 무손실 승계",
         f"# • 시놀로지 권한: PUID={cfg.puid} / PGID={cfg.pgid} / TZ={cfg.tz}",
@@ -102,12 +121,13 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
     if "mediarr-control-center" in selected:
         lines.extend([
             "  # ---------------------------------------------------------------------------",
-            "  # 🎛️ 0. MEDIARR CONTROL CENTER - 통합 관제 · 폴더/설정 자동 초기화 · DB 닥터",
+            "  # 🎛️ 0. MEDIARR CONTROL CENTER - 통합 관제 · 폴더/설정 자동 초기화 · 24h 자동 DB 닥터",
             "  # ---------------------------------------------------------------------------",
             "  mediarr-control-center:",
             "    image: kimmingil/mediarr-stack:latest",
             "    container_name: mediarr-control-center",
             "    hostname: mediarr-control-center",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -123,6 +143,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             f"      PGID: ${{PGID:-{cfg.pgid}}}",
             "      PORT: 8500",
             '      AUTO_BOOTSTRAP: "true"',
+            '      AUTO_MAINTENANCE_INTERVAL_HOURS: "24"',
             "      HOST_DOCKER_MOUNT: /host-docker",
             "      HOST_DATA_MOUNT: /host-data",
             f"      NAS_IP: ${{NAS_IP:-{cfg.nas_ip}}}",
@@ -184,6 +205,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: qmcgaw/gluetun:latest",
             "    container_name: mediarr-gluetun",
             "    hostname: gluetun",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -229,6 +251,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "  qbittorrent:",
             "    image: lscr.io/linuxserver/qbittorrent:latest",
             "    container_name: mediarr-qbittorrent",
+            *_wt_labels(wt, depends_on_gluetun=vpn_active),
         ])
         if vpn_active:
             lines.extend([
@@ -286,6 +309,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: lscr.io/linuxserver/plex:latest",
             "    container_name: mediarr-plex",
             "    hostname: plex",
+            *_wt_labels(wt),
             "    network_mode: host",
             "    mem_limit: 4g",
             "    cpu_shares: 1024",
@@ -347,6 +371,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             f"    image: {seerr_image}",
             "    container_name: mediarr-seerr",
             "    hostname: seerr",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -382,6 +407,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
 
     # 5. PROWLARR
     if "prowlarr" in selected:
+        prowlarr_vpn = vpn_active and cfg.route_prowlarr_vpn
         lines.extend([
             "  # ---------------------------------------------------------------------------",
             "  # 📡 5. PROWLARR - 통합 토렌트 인덱서 컨트롤 타워 (Sonarr·Radarr 자동 동기화)",
@@ -389,8 +415,9 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "  prowlarr:",
             "    image: lscr.io/linuxserver/prowlarr:latest",
             "    container_name: mediarr-prowlarr",
+            *_wt_labels(wt, depends_on_gluetun=prowlarr_vpn),
         ])
-        if vpn_active and cfg.route_prowlarr_vpn:
+        if prowlarr_vpn:
             lines.extend([
                 '    network_mode: "service:gluetun"',
                 "    depends_on:",
@@ -431,6 +458,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
 
     # 6. FLARESOLVERR
     if "flaresolverr" in selected:
+        flare_vpn = vpn_active and cfg.route_prowlarr_vpn
         lines.extend([
             "  # ---------------------------------------------------------------------------",
             "  # 🛡️ 6. FLARESOLVERR - 인덱서 Cloudflare 보안 검증 백그라운드 자동 우회",
@@ -438,8 +466,9 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "  flaresolverr:",
             "    image: ghcr.io/flaresolverr/flaresolverr:latest",
             "    container_name: mediarr-flaresolverr",
+            *_wt_labels(wt, depends_on_gluetun=flare_vpn),
         ])
-        if vpn_active and cfg.route_prowlarr_vpn:
+        if flare_vpn:
             lines.extend([
                 '    network_mode: "service:gluetun"',
                 "    depends_on:",
@@ -464,7 +493,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    environment:",
             f"      TZ: ${{TZ:-{cfg.tz}}}",
             "      LOG_LEVEL: info",
-            "      LOG_HTML: \"false\"",
+            '      LOG_HTML: "false"',
             "      CAPTCHA_SOLVER: none",
             "    healthcheck:",
             '      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:8191/ >/dev/null 2>&1 || exit 1"]',
@@ -487,6 +516,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: lscr.io/linuxserver/sonarr:latest",
             "    container_name: mediarr-sonarr",
             "    hostname: sonarr",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -528,6 +558,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: lscr.io/linuxserver/radarr:latest",
             "    container_name: mediarr-radarr",
             "    hostname: radarr",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -569,6 +600,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: lscr.io/linuxserver/bazarr:latest",
             "    container_name: mediarr-bazarr",
             "    hostname: bazarr",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -607,6 +639,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: ghcr.io/recyclarr/recyclarr:latest",
             "    container_name: mediarr-recyclarr",
             "    hostname: recyclarr",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -638,6 +671,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: golift/unpackerr:latest",
             "    container_name: mediarr-unpackerr",
             "    hostname: unpackerr",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -674,6 +708,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: lscr.io/linuxserver/tautulli:latest",
             "    container_name: mediarr-tautulli",
             "    hostname: tautulli",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -713,6 +748,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: kometateam/kometa:latest",
             "    container_name: mediarr-kometa",
             "    hostname: kometa",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -745,6 +781,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "    image: ghcr.io/jorenn92/maintainerr:latest",
             "    container_name: mediarr-maintainerr",
             "    hostname: maintainerr",
+            *_wt_labels(wt),
             "    networks:",
             "      mediarr_net:",
             "        aliases:",
@@ -914,57 +951,23 @@ echo "✅ MEDIARR-STACK 시놀로지 폴더 및 하드링크 권한 세팅이 10
 
 
 def generate_maintenance_doctor_script(cfg: MediarrStackConfigRequest) -> str:
-    """Generate upgraded full-stack maintenance & update script (replacing old update_qbittorrent.sh)."""
+    """Generate optional manual maintenance script (while Watchtower + Control Center handle everything automatically)."""
     docker_root = cfg.docker_root.rstrip("/")
     return f"""#!/bin/bash
 # =============================================================================
-# 🩺 MEDIARR-STACK 통합 업데이트 · VPN 보안 점검 · SQLite DB 최적화 닥터 스크립트
-# (기존 update_qbittorrent.sh의 전체 스택 확장 업그레이드 버전 - Watchtower 불필요)
+# 🩺 MEDIARR-STACK 수동 점검용 보조 스크립트 (선택 사항)
+# • 평소 이미지 업데이트: 기존 운영 중인 Watchtower가 라벨(enable=true & depends-on)을 인식해 100% 자동 수행합니다.
+# • 평소 DB 최적화·백업: mediarr-control-center 컨테이너 내장 스케줄러가 24시간마다 자동 수행합니다.
 # =============================================================================
 
-WORK_DIR="{docker_root}/mediarr-stack"
-LOG_FILE="${{WORK_DIR}}/mediarr-update.log"
-
-mkdir -p "$WORK_DIR"
-exec >> "$LOG_FILE" 2>&1
-
-echo "================================================================="
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] MEDIARR-STACK 통합 유지보수 & 업데이트 시작"
-echo "================================================================="
-
-export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
-
-if command -v docker compose &> /dev/null; then
-    DOCKER_CMD="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    DOCKER_CMD="docker-compose"
-else
-    echo "오류: docker compose 명령어를 찾을 수 없습니다."
-    exit 1
-fi
-
-echo ">> [1/5] Plex 비정상 종료 잔여 PID 파일 정리..."
+echo ">> [1/2] Plex 잔여 PID 정리 및 Mediarr Control Center 즉시 DB 최적화 트리거..."
 rm -f "{docker_root}/plexhw/Library/Application Support/Plex Media Server/plexmediaserver.pid" 2>/dev/null || true
-
-echo ">> [2/5] Mediarr Control Center를 통한 SQLite DB VACUUM 최적화 & 설정 백업 실행..."
 curl -fsS -X POST http://127.0.0.1:8500/api/runtime/maintenance || true
 
-if [ -f "$WORK_DIR/docker-compose.yml" ] || [ -f "$WORK_DIR/compose.yaml" ]; then
-    cd "$WORK_DIR"
-    echo ">> [3/5] 전체 컨테이너 최신 이미지 다운로드 (Pull)..."
-    $DOCKER_CMD pull
-    echo ">> [4/5] 변경된 컨테이너 무중단 재구동 (Up -d)..."
-    $DOCKER_CMD up -d --remove-orphans
-fi
-
-echo ">> [5/5] Gluetun VPN 터널 공인 IP 보호 상태 검증 및 구버전 이미지 정리..."
+echo ">> [2/2] Gluetun VPN 공인 IP 보호 상태 확인..."
 docker exec mediarr-gluetun wget -qO- https://ipinfo.io/json 2>/dev/null || true
-docker image prune -f
-
-chmod 666 "$LOG_FILE" 2>/dev/null || true
-echo "================================================================="
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] MEDIARR-STACK 유지보수가 성공적으로 완료되었습니다."
-echo "================================================================="
+echo ""
+echo "✅ 점검 완료!"
 """
 
 

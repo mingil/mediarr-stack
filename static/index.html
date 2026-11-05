@@ -34,9 +34,9 @@
         <div>
           <div class="flex items-center gap-2 flex-wrap">
             <h1 class="text-xl font-bold tracking-tight text-white">Mediarr Stack 통합 관제 센터</h1>
-            <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">mediarr-stack v1.1.0</span>
+            <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">mediarr-stack v1.2.0</span>
             <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">기존 plexhw · qbittorrent(:8181) 100% 승계</span>
-            <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30">Watchtower 제외 완료</span>
+            <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30">기존 Watchtower 라벨(depends-on) 완벽 연동</span>
           </div>
           <p class="text-xs text-slate-400 mt-0.5">
             단일 프로젝트 · 단일 <code class="text-indigo-300">docker-compose.yml</code> &amp; 관제 도커 이미지(<code class="text-emerald-300">kimmingil/mediarr-stack:latest</code>) 기반 올인원 미디어 자동화 생태계
@@ -129,7 +129,7 @@
 
       <div class="glass rounded-2xl p-6">
         <h2 class="text-lg font-bold text-white mb-1">📦 단일 프로젝트(<code class="text-indigo-300">mediarr-stack</code>) 15대 통합 컨테이너 카탈로그</h2>
-        <p class="text-xs text-slate-400 mb-4">요청하신 대로 Watchtower는 완전히 배제되었으며, 모든 컨테이너는 <code class="text-emerald-300">mediarr-&lt;서비스명&gt;</code> 규칙으로 통일되었습니다.</p>
+        <p class="text-xs text-slate-400 mb-4">중복 Watchtower 컨테이너는 넣지 않고, 기존에 구동 중인 Watchtower가 인식할 수 있도록 15개 전 컨테이너에 <code class="text-emerald-300">com.centurylinklabs.watchtower.enable=true</code> 및 VPN 종속 라벨(<code class="text-amber-300">depends-on=mediarr-gluetun</code>)을 완비했습니다.</p>
         <div id="catalogGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
       </div>
     </section>
@@ -195,6 +195,10 @@
             <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
               <input id="cfgHwTranscode" type="checkbox" checked onchange="regenerateCompose()" class="rounded bg-slate-800 border-slate-600 text-indigo-500" />
               <span>Plex Intel QuickSync (/dev/dri) + 2GB RAM 트랜스코딩</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+              <input id="cfgWatchtowerLabels" type="checkbox" checked onchange="regenerateCompose()" class="rounded bg-slate-800 border-slate-600 text-indigo-500" />
+              <span>기존 Watchtower 자동 업데이트 라벨 (enable &amp; depends-on)</span>
             </label>
           </div>
 
@@ -351,6 +355,7 @@
         use_vpn: document.getElementById('cfgUseVpn').checked,
         route_prowlarr_vpn: document.getElementById('cfgRouteProwlarr').checked,
         enable_hw_transcoding: document.getElementById('cfgHwTranscode').checked,
+        enable_watchtower_labels: document.getElementById('cfgWatchtowerLabels').checked,
         selected_services: selectedServices,
       };
     }

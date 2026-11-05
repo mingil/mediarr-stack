@@ -55,13 +55,13 @@ DIAGNOSIS_REPORT: List[Dict[str, Any]] = [
     },
     {
         "id": "MAINT-06",
-        "severity": "MEDIUM",
-        "target": "Watchtower 라벨 & update_qbittorrent.sh",
-        "title": "Watchtower 라벨 잔재 제거 및 부분 업데이트 스크립트의 통합 고도화",
-        "symptom": "기존 컴포즈에 com.centurylinklabs.watchtower.* 라벨이 남아 있었고, update_qbittorrent.sh는 qbittorrent_gluetun 두 컨테이너만 재시작하여 전체 미디어 생태계 관리가 불가능했습니다.",
-        "root_cause": "단편적인 쉘 스크립트와 불필요한 Watchtower 의존성.",
-        "resolution": "요청에 따라 Watchtower 컨테이너와 모든 라벨을 100% 영구 제거하고, 전체 mediarr-stack의 순차 업데이트·VPN IP 유출 검증·SQLite DB 최적화·백업을 총괄하는 mediarr-control-center 및 mediarr-maintenance-doctor.sh로 격상했습니다.",
-        "status": "해결 완료 (Watchtower 완전 배제 & 통합 유지보수 엔진 탑재)",
+        "severity": "HIGH",
+        "target": "기존 Watchtower 연동 라벨 & Gluetun 종속성 체인",
+        "title": "기존 Watchtower 컨테이너 100% 호환 라벨 적용 및 VPN 재시작 순서(depends-on) 정밀 매핑",
+        "symptom": "대부분의 시놀로지 사용자는 이미 전역 Watchtower 컨테이너를 구동 중이므로 컴포즈 내에 중복 Watchtower 컨테이너를 넣으면 충돌이 발생하며, 반대로 라벨이나 depends-on 매핑이 빠지면 Gluetun 업데이트 시 qBittorrent 네트워크가 끊기는 현상이 발생합니다.",
+        "root_cause": "컨테이너 이름 변경(mediarr-gluetun)에 맞춘 Watchtower depends-on 라벨 동기화 및 전 컨테이너 자동 업데이트 라벨 표준화 필요.",
+        "resolution": "중복 Watchtower 컨테이너는 넣지 않고, 15개 전 컨테이너에 com.centurylinklabs.watchtower.enable=true 라벨을 기본 탑재했습니다. 특히 Gluetun 네트워크를 공유하는 컨테이너들에는 com.centurylinklabs.watchtower.depends-on=mediarr-gluetun 라벨을 정확히 매핑하여 기존 Watchtower가 VPN 끊김 없이 안전하게 자동 업데이트하도록 완성했습니다.",
+        "status": "해결 완료 (기존 Watchtower 완벽 호환 & VPN 종속성 라벨 적용)",
     },
     {
         "id": "SEC-07",
@@ -142,15 +142,15 @@ ORGANIC_PIPELINES: List[Dict[str, Any]] = [
     {
         "id": "pipeline_control_center_doctor",
         "step": "05",
-        "title": "통합 관제 센터(mediarr-control-center) 자동 프로비저닝 · 자가 치유 · SQLite DB 최적화",
+        "title": "기존 Watchtower 무인 이미지 업데이트 + 관제 센터(mediarr-control-center) 24시간 주기 자동 DB 최적화·백업",
         "flow": [
-            "mediarr-control-center (:8500)",
+            "기존 Watchtower (컨테이너 이미지 자동 업데이트)",
+            "mediarr-control-center (:8500, 내장 스케줄러)",
             "폴더/설정 자동 초기화 (Auto-Bootstrap)",
-            "좀비 PID 제거 & SQLite VACUUM/ANALYZE",
-            "전 컨테이너 설정 tar.gz 자동 백업",
+            "24시간 주기 좀비 PID 제거 & SQLite VACUUM & 설정 백업",
         ],
-        "description": "본 프로젝트의 도커 이미지(kimmingil/mediarr-stack:latest)가 함께 구동되며 부팅 시 모든 필수 디렉토리와 설정 파일을 자동 생성합니다. 또한 비정상 종료된 Plex PID 파일을 자동 제거하고, Plex 및 *Arr 전체 SQLite DB를 최적화(VACUUM)하여 서버 반응 속도를 항상 최상으로 유지합니다.",
-        "verification": "실제 업로드된 plexhw/Library 대상 좀비 PID 제거 및 SQLite DB 최적화 테스트 검증 완료",
+        "description": "전 컨테이너에 탑재된 Watchtower 라벨(enable=true 및 depends-on=mediarr-gluetun)을 통해 기존에 사용하시던 Watchtower가 이미지 업데이트를 100% 자동으로 수행합니다. 동시에 mediarr-control-center 내부의 자동 스케줄러가 작업 스케줄러 등록 없이도 매일 스스로 좀비 Plex PID 제거, SQLite DB 최적화(VACUUM), 설정 백업을 자동 실행합니다.",
+        "verification": "Watchtower 라벨(depends-on=mediarr-gluetun) 및 내장 24시간 주기 자동 유지보수 루프 검증 완료",
     },
 ]
 

@@ -24,7 +24,8 @@ def test_health_check():
     assert data["status"] == "ok"
     assert data["service"] == "mediarr-stack"
     assert data["image"] == "kimmingil/mediarr-stack:latest"
-    assert data["watchtower_included"] is False
+    assert data["watchtower_service_duplicated"] is False
+    assert data["watchtower_labels_enabled"] is True
     assert data["diagnosed_issues_resolved"] == 8
     assert data["organic_pipelines_count"] == 5
 
@@ -65,15 +66,21 @@ def test_generate_full_compose_organic_integration():
     payload = res.json()
     compose_str = payload["docker_compose"]
 
-    # Ensure no marius or watchtower anywhere in generated compose
+    # Ensure no marius anywhere and no duplicate watchtower service container
     assert "marius" not in compose_str.lower()
-    assert "watchtower" not in compose_str.lower()
 
     parsed = yaml.safe_load(compose_str)
     assert "mediarr_net" in parsed["networks"]
     services = parsed["services"]
+    assert "watchtower" not in services
     assert len(services) == 15
     assert "mediarr-control-center" in services
+
+    # Verify Watchtower labels on all services and depends-on=mediarr-gluetun on VPN-routed services
+    for svc_name, svc_def in services.items():
+        assert "com.centurylinklabs.watchtower.enable=true" in svc_def.get("labels", []), f"Missing watchtower label on {svc_name}"
+    for vpn_svc in ["qbittorrent", "prowlarr", "flaresolverr"]:
+        assert "com.centurylinklabs.watchtower.depends-on=mediarr-gluetun" in services[vpn_svc]["labels"]
 
     # Verify Gluetun firewall subnets, healthcheck, and aliases
     gluetun = services["gluetun"]

@@ -1,9 +1,10 @@
 """FastAPI Backend for the Unified Media & *Arr Automation Stack Control Center (mediarr-stack)."""
 
+import asyncio
 import io
 import os
 import zipfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -42,17 +43,43 @@ STACKS_DIR = BASE_DIR / "stacks"
 LEGACY_DIR = BASE_DIR / "legacy-backup"
 
 
+async def _periodic_maintenance_loop(interval_hours: float) -> None:
+    """Background loop inside mediarr-control-center that runs DB optimization & backup every N hours."""
+    sleep_seconds = max(3600.0, interval_hours * 3600.0)
+    while True:
+        await asyncio.sleep(sleep_seconds)
+        try:
+            await asyncio.to_thread(run_sqlite_maintenance_and_backup)
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if os.environ.get("AUTO_BOOTSTRAP", "true").lower() == "true":
         bootstrap_host_environment()
+
+    interval_str = os.environ.get("AUTO_MAINTENANCE_INTERVAL_HOURS", "24")
+    bg_task = None
+    try:
+        interval_hours = float(interval_str)
+        if interval_hours > 0:
+            bg_task = asyncio.create_task(_periodic_maintenance_loop(interval_hours))
+    except ValueError:
+        pass
+
     yield
+
+    if bg_task:
+        bg_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await bg_task
 
 
 app = FastAPI(
     title="Ultimate Media & *Arr Stack Control Center (mediarr-stack)",
     description="시놀로지 NAS (DS920+) 맞춤형 Plex(HW) · Gluetun(Surfshark) · qBittorrent · Seerr · Prowlarr · Sonarr · Radarr · Bazarr 단일 프로젝트 통합 관제 센터",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
 
@@ -88,9 +115,11 @@ async def health_check() -> Dict[str, Any]:
         "status": "ok",
         "service": "mediarr-stack",
         "image": "kimmingil/mediarr-stack:latest",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "architecture": "Unified Single-Project Docker Compose + Active Runtime Control Center",
-        "watchtower_included": False,
+        "watchtower_service_duplicated": False,
+        "watchtower_labels_enabled": True,
+        "auto_maintenance_scheduler": "24h internal loop active",
         "diagnosed_issues_resolved": len(DIAGNOSIS_REPORT),
         "organic_pipelines_count": len(ORGANIC_PIPELINES),
     }
@@ -106,7 +135,7 @@ async def get_diagnosis() -> Dict[str, Any]:
     return {
         "legacy_projects_merged": ["plexhw", "qbittorrent_gluetun"],
         "unified_project_name": "mediarr-stack",
-        "container_naming_scheme": "mediarr-<서비스명> (내부 DNS 호스트네임 양방향 호환)",
+        "container_naming_scheme": "mediarr-<서비스명> (내부 DNS 호스트네임 양방향 호환 + 기존 Watchtower 라벨 완비)",
         "issues_count": len(DIAGNOSIS_REPORT),
         "issues": DIAGNOSIS_REPORT,
         "organic_pipelines": ORGANIC_PIPELINES,

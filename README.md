@@ -4,7 +4,8 @@
 
 > **핵심 설계 원칙:**
 > - **기존 `plexhw` & `qbittorrent_gluetun` 100% 무손실 승계:** 기존에 사용하시던 `/volume1/docker/plexhw`(6.7GB 메타데이터·설정), qBittorrent 포트(`8181`), Surfshark Tokyo WireGuard/OpenVPN 설정, `/volume1/video` 및 `/volume1/torrents` 경로를 그대로 유지하면서 단일 프로젝트로 완벽 통합했습니다.
-> - **Watchtower 완전 배제:** 불안정한 강제 재시작을 유발하는 Watchtower 컨테이너와 라벨을 100% 제거하고, 전용 관제 센터(`mediarr-control-center`)와 `mediarr-maintenance-doctor.sh`가 안전한 업데이트·DB 최적화·백업을 전담합니다.
+> - **기존 Watchtower 100% 완벽 연동 (중복 컨테이너 제외 + 전용 라벨 탑재):** 시놀로지 NAS에서 이미 구동 중인 Watchtower와 충돌하지 않도록 중복 Watchtower 컨테이너는 넣지 않고, 15개 전 컨테이너에 `com.centurylinklabs.watchtower.enable=true` 라벨과 VPN 종속성 라벨(`com.centurylinklabs.watchtower.depends-on=mediarr-gluetun`)을 탑재하여 기존 Watchtower가 VPN 끊김 없이 안전하게 자동 업데이트합니다.
+> - **내장 24시간 주기 자동 DB 닥터:** 별도의 작업 스케줄러 등록 없이도 `mediarr-control-center`가 24시간마다 자동으로 좀비 PID 청소, SQLite DB 최적화(`VACUUM`), 설정 백업을 수행합니다.
 > - **TRaSH Guides 0.1초 하드링크 표준:** 전 컨테이너가 `/volume1/mediarr:/data:rw` 단일 볼륨을 공유하여, 수십 GB의 4K 영화도 다운로드 완료 즉시 **복사 시간 0.1초, 추가 디스크 소모 0바이트(하드링크)**로 Plex 서재에 연결됩니다.
 
 ---
