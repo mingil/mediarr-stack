@@ -405,6 +405,11 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "      - no-new-privileges:true",
             "    ports:",
             '      - "5055:5055/tcp"',
+            *(
+                ['    command: ["sh", "-c", "node /app/config/apply-patches.js || true; exec node dist/index.js"]']
+                if cfg.seerr_variant != "overseerr"
+                else []
+            ),
             "    volumes:",
             seerr_vol,
             "    environment:",
@@ -630,6 +635,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             '      - "6767:6767/tcp"',
             "    volumes:",
             f"      - {docker_root}/bazarr:/config:rw",
+            f"      - {docker_root}/bazarr/yifysubtitles.py:/app/bazarr/bin/custom_libs/subliminal_patch/providers/yifysubtitles.py:ro",
             f"      - {data_root}:/data:rw",
             "    environment:",
             f"      TZ: ${{TZ:-{cfg.tz}}}",

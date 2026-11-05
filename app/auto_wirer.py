@@ -3,6 +3,7 @@
 import configparser
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -191,7 +192,19 @@ def provision_bazarr_config(
 
     cfg_file.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
     _safe_chown_chmod(cfg_file, puid, pgid, is_dir=False)
-    return "Bazarr: 한국어·영어 자막 공급자 활성화, Sonarr·Radarr 연동 및 AI Subsync 오디오 싱크 보정 설정 완료"
+
+    res_dir = Path(__file__).resolve().parent / "resources"
+    for script_name in ("yifysubtitles.py", "plex_sub_autofix.py"):
+        src_script = res_dir / script_name
+        dst_script = docker_root / "bazarr" / script_name
+        if src_script.exists():
+            try:
+                shutil.copy2(src_script, dst_script)
+                _safe_chown_chmod(dst_script, puid, pgid, is_dir=False)
+            except Exception:
+                pass
+
+    return "Bazarr: 공식 블루레이/VOD 한국어 자막 품질 엔진, Sonarr·Radarr 연동 및 Plex 자동 자막 선택 후처리 설정 완료"
 
 
 def provision_seerr_settings(
@@ -209,6 +222,14 @@ def provision_seerr_settings(
     seerr_dir = docker_root / "seerr"
     seerr_dir.mkdir(parents=True, exist_ok=True)
     _safe_chown_chmod(seerr_dir, puid, pgid, is_dir=True)
+    src_patch = Path(__file__).resolve().parent / "resources/apply-patches.js"
+    if src_patch.exists():
+        try:
+            dst_patch = seerr_dir / "apply-patches.js"
+            shutil.copy2(src_patch, dst_patch)
+            _safe_chown_chmod(dst_patch, puid, pgid, is_dir=False)
+        except Exception:
+            pass
     settings_file = seerr_dir / "settings.json"
 
     data: Dict[str, Any] = {}
