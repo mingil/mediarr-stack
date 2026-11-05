@@ -13,7 +13,7 @@ from zipfile import ZipFile, is_zipfile
 from bs4 import BeautifulSoup
 from guessit import guessit
 from requests import Session
-from subliminal import Movie
+from subliminal import Episode, Movie
 from subliminal.subtitle import fix_line_ending
 from subliminal_patch.providers import Provider
 from subliminal_patch.subtitle import Subtitle, guess_matches
@@ -126,7 +126,10 @@ class YifySubtitle(Subtitle):
         return self
 
     def get_matches(self, video):
-        self.matches.add('imdb_id')
+        if isinstance(video, Episode):
+            self.matches.update({'series', 'year', 'season', 'episode', 'series_imdb_id'})
+        else:
+            self.matches.add('imdb_id')
         self.matches |= guess_matches(video, guessit(self.release_info, video.hints))
         return self.matches
 
@@ -178,7 +181,7 @@ class YifySubtitlesProvider(Provider):
     languages = {Language(l, c) for (_, l, c) in YifyLanguages}
     languages.update(set(Language.rebuild(l, hi=True) for l in languages))
     server_url = 'https://yts-subs.com'
-    video_types = (Movie,)
+    video_types = (Episode, Movie)
 
     def initialize(self):
         self.session = Session()
@@ -189,11 +192,9 @@ class YifySubtitlesProvider(Provider):
     def terminate(self):
         self.session.close()
 
-    def _query_opensubtitles_rest_korean(self, imdb_id):
+    def _fetch_opensubtitles_candidates(self, os_url, min_score=150):
         results = []
         try:
-            imdb_num = imdb_id.lstrip('t')
-            os_url = f"https://rest.opensubtitles.org/search/imdbid-{imdb_num}/sublanguageid-kor"
             resp = self.session.get(os_url, headers={"User-Agent": "TemporaryUserAgent"}, timeout=10)
             if resp.status_code != 200:
                 return results
@@ -215,7 +216,7 @@ class YifySubtitlesProvider(Provider):
                     norm_bytes = normalize_korean_subtitle_bytes(dl.content, is_smi=is_smi)
                     sample_txt = norm_bytes.decode("utf-8", errors="ignore")[:3000]
                     q_score = score_korean_sub_candidate(it, sample_txt)
-                    if q_score >= 150:
+                    if q_score >= min_score:
                         rel_name = it.get("MovieReleaseName") or it.get("SubFileName") or "BluRay.1080p.x264"
                         best_candidates.append(
                             YifySubtitle(
@@ -235,6 +236,16 @@ class YifySubtitlesProvider(Provider):
         except Exception as e:
             logger.debug("OpenSubtitles REST Korean check error: %s", e)
             return results
+
+    def _query_opensubtitles_rest_korean(self, imdb_id):
+        imdb_num = str(imdb_id).lstrip('t')
+        os_url = f"https://rest.opensubtitles.org/search/imdbid-{imdb_num}/sublanguageid-kor"
+        return self._fetch_opensubtitles_candidates(os_url, min_score=150)
+
+    def _query_opensubtitles_rest_korean_episode(self, imdb_id, season, episode):
+        imdb_num = str(imdb_id).lstrip('t')
+        os_url = f"https://rest.opensubtitles.org/search/episode-{int(episode)}/imdbid-{imdb_num}/season-{int(season)}/sublanguageid-kor"
+        return self._fetch_opensubtitles_candidates(os_url, min_score=80)
 
     def _parse_row(self, row, languages, server_url):
         td = row.findAll('td')
@@ -283,6 +294,12 @@ class YifySubtitlesProvider(Provider):
         return subtitles
 
     def list_subtitles(self, video, languages):
+        if isinstance(video, Episode):
+            imdb_id = getattr(video, 'series_imdb_id', None) or getattr(video, 'imdb_id', None)
+            if imdb_id and video.season is not None and video.episode is not None and any(l.alpha3 == 'kor' for l in languages):
+                ep_num = video.episode[0] if isinstance(video.episode, (list, tuple)) else video.episode
+                return self._query_opensubtitles_rest_korean_episode(imdb_id, video.season, ep_num)
+            return []
         return self.query(languages, video.imdb_id) if isinstance(video, Movie) and video.imdb_id else []
 
     def download_subtitle(self, subtitle):

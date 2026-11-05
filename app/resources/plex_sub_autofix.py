@@ -62,6 +62,7 @@ def refresh_and_select_korean_in_plex(directory: str) -> None:
             qtype = "1" if sec_type == "movie" else "4"
             all_xml = urllib.request.urlopen(f"{PLEX_URL}/library/sections/{sec_key}/all?type={qtype}&X-Plex-Token={PLEX_TOKEN}", timeout=10).read()
             aroot = ET.fromstring(all_xml)
+            matched_rkeys = []
             for video in aroot.findall(".//Video"):
                 rkey = video.attrib.get("ratingKey")
                 m_xml = urllib.request.urlopen(f"{PLEX_URL}/library/metadata/{rkey}?X-Plex-Token={PLEX_TOKEN}", timeout=10).read()
@@ -73,21 +74,24 @@ def refresh_and_select_korean_in_plex(directory: str) -> None:
                 if folder_name and (folder_name in file_path or directory.rstrip("/") in file_path):
                     req = urllib.request.Request(f"{PLEX_URL}/library/metadata/{rkey}/refresh?X-Plex-Token={PLEX_TOKEN}", method="PUT")
                     urllib.request.urlopen(req, timeout=10)
-                    time.sleep(2)
-                    m_xml2 = urllib.request.urlopen(f"{PLEX_URL}/library/metadata/{rkey}?X-Plex-Token={PLEX_TOKEN}", timeout=10).read()
-                    mroot2 = ET.fromstring(m_xml2)
-                    part2 = mroot2.find(".//Part")
-                    part_id = part2.attrib.get("id") if part2 is not None else None
-                    ko_stream_id = None
-                    for st in mroot2.findall(".//Stream"):
-                        if st.attrib.get("streamType") == "3" and st.attrib.get("languageCode") in ("kor", "ko"):
-                            ko_stream_id = st.attrib.get("id")
-                            if st.attrib.get("codec") == "srt":
-                                break
-                    if part_id and ko_stream_id:
-                        put_url = f"{PLEX_URL}/library/parts/{part_id}?subtitleStreamID={ko_stream_id}&allParts=1&X-Plex-Token={PLEX_TOKEN}"
-                        urllib.request.urlopen(urllib.request.Request(put_url, method="PUT"), timeout=10)
-                        print(f"[plex_sub_autofix] Selected Korean subtitle stream {ko_stream_id} for ratingKey={rkey}")
+                    matched_rkeys.append(rkey)
+            if matched_rkeys:
+                time.sleep(2)
+            for rkey in matched_rkeys:
+                m_xml2 = urllib.request.urlopen(f"{PLEX_URL}/library/metadata/{rkey}?X-Plex-Token={PLEX_TOKEN}", timeout=10).read()
+                mroot2 = ET.fromstring(m_xml2)
+                part2 = mroot2.find(".//Part")
+                part_id = part2.attrib.get("id") if part2 is not None else None
+                ko_stream_id = None
+                for st in mroot2.findall(".//Stream"):
+                    if st.attrib.get("streamType") == "3" and st.attrib.get("languageCode") in ("kor", "ko"):
+                        ko_stream_id = st.attrib.get("id")
+                        if st.attrib.get("codec") == "srt":
+                            break
+                if part_id and ko_stream_id:
+                    put_url = f"{PLEX_URL}/library/parts/{part_id}?subtitleStreamID={ko_stream_id}&allParts=1&X-Plex-Token={PLEX_TOKEN}"
+                    urllib.request.urlopen(urllib.request.Request(put_url, method="PUT"), timeout=10)
+                    print(f"[plex_sub_autofix] Selected Korean subtitle stream {ko_stream_id} for ratingKey={rkey}")
     except Exception as e:
         print(f"[plex_sub_autofix] Plex sync error: {e}")
 
