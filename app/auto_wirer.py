@@ -156,7 +156,12 @@ def provision_bazarr_config(
     general["auto_update"] = False
     general["serie_default_enabled"] = True
     general["movie_default_enabled"] = True
-    general.setdefault("enabled_providers", ["yify", "subdl", "podnapisi", "gestdown", "animetosho"])
+    general["minimum_score_movie"] = 50
+    general["minimum_score"] = 60
+    general.setdefault(
+        "enabled_providers",
+        ["yifysubtitles", "supersubtitles", "subf2m", "podnapisi", "tvsubtitles", "gestdown", "animetosho"],
+    )
 
     sonarr_sec = data.setdefault("sonarr", {})
     sonarr_sec["ip"] = "sonarr"
@@ -202,9 +207,12 @@ def provision_seerr_settings(
     settings_file = seerr_dir / "settings.json"
 
     data: Dict[str, Any] = {}
+    orig_str = ""
     if settings_file.exists():
         try:
-            data = json.loads(settings_file.read_text(encoding="utf-8"))
+            orig_text = settings_file.read_text(encoding="utf-8")
+            data = json.loads(orig_text)
+            orig_str = json.dumps(data, sort_keys=True)
         except Exception:
             data = {}
 
@@ -212,6 +220,14 @@ def provision_seerr_settings(
     main_sec["locale"] = "en"
     main_sec["discoverRegion"] = "KR"
     main_sec["streamingRegion"] = "KR"
+    main_sec["versionCheck"] = False
+
+    net_sec = data.setdefault("network", {})
+    net_sec["forceIpv4First"] = True
+    dns_sec = net_sec.setdefault("dnsCache", {})
+    dns_sec["enabled"] = True
+    dns_sec["forceMinTtl"] = 300
+    dns_sec["forceMaxTtl"] = 3600
 
     plex_sec = data.setdefault("plex", {})
     plex_sec.setdefault("name", "Plex Media Server")
@@ -280,7 +296,8 @@ def provision_seerr_settings(
             sonarr_list[0]["activeDirectory"] = "/data/media/tv"
             sonarr_list[0]["activeAnimeDirectory"] = "/data/media/anime"
 
-    if settings_file.exists() or sonarr_api_key or radarr_api_key:
+    new_str = json.dumps(data, sort_keys=True)
+    if (settings_file.exists() or sonarr_api_key or radarr_api_key) and new_str != orig_str:
         settings_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         _safe_chown_chmod(settings_file, puid, pgid, is_dir=False)
 
@@ -558,9 +575,11 @@ async def configure_seerr_via_api(
     if r_main.status_code == 200:
         main_cfg = r_main.json()
         if main_cfg.get("locale") != "en" or main_cfg.get("discoverRegion") != "KR":
+            main_cfg.pop("apiKey", None)
             main_cfg["locale"] = "en"
             main_cfg["discoverRegion"] = "KR"
             main_cfg["streamingRegion"] = "KR"
+            main_cfg["versionCheck"] = False
             await client.post(f"{seerr_url}/api/v1/settings/main", headers=headers, json=main_cfg)
             logs.append("Seerr API: 영어(en) 인터페이스 및 한국 OTT(KR) 탐색 지역 실시간 적용")
 
