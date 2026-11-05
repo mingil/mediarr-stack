@@ -23,15 +23,21 @@ from .utils import FIRST_THOUSAND_OR_SO_USER_AGENTS as AGENT_LIST
 logger = logging.getLogger(__name__)
 
 
-def score_korean_sub_candidate(meta, content_sample=""):
+def score_korean_sub_candidate(meta, content_sample="", video_title=""):
     score = 100
     rel = (meta.get("MovieReleaseName", "") + " " + meta.get("SubFileName", "")).lower()
     cmt = str(meta.get("SubAuthorComment", "") or "").lower()
+    if video_title:
+        clean_words = [w for w in re.findall(r"[a-z0-9]+", video_title.lower()) if len(w) >= 3]
+        if clean_words and all(w in rel for w in clean_words[:2]):
+            score += 200
+        elif clean_words and clean_words[0] not in rel:
+            score -= 300
     if any(bad in rel for bad in ("hdcam", "cam", "hdtc", ".tc.", "telesync", "캠버전", "김코난")):
         score -= 500
     if any(good in rel for good in ("bluray", "blu-ray", "remux", "web-dl", "webrip", "1080p", "2160p")):
         score += 100
-    if any(grp in rel for grp in ("sparks", "rarbg", "fgt", "amiable", "tigole", "ethel", "zorosenpai")):
+    if any(grp in rel for grp in ("sparks", "rarbg", "fgt", "amiable", "tigole", "ethel", "zorosenpai", "kitsune", "amzn", "dsnp", "nf")):
         score += 150
     if any(r in cmt for r in ("retail", "릴맞춤", "내장자막", "공식")):
         score += 200
@@ -192,7 +198,7 @@ class YifySubtitlesProvider(Provider):
     def terminate(self):
         self.session.close()
 
-    def _fetch_opensubtitles_candidates(self, os_url, min_score=150):
+    def _fetch_opensubtitles_candidates(self, os_url, min_score=150, video_title="", filter_ep=None):
         results = []
         try:
             resp = self.session.get(os_url, headers={"User-Agent": "TemporaryUserAgent"}, timeout=10)
@@ -201,7 +207,13 @@ class YifySubtitlesProvider(Provider):
             items = resp.json()
             if not isinstance(items, list):
                 return results
-            items.sort(key=lambda x: score_korean_sub_candidate(x), reverse=True)
+            if filter_ep is not None:
+                items = [
+                    it for it in items
+                    if str(it.get("SeriesEpisode", "")) == str(int(filter_ep))
+                    or re.search(rf"(?:e|ep|-|\s)0*{int(filter_ep)}(?:\D|$)", (it.get("SubFileName", "") + " " + it.get("MovieReleaseName", "")), re.I)
+                ]
+            items.sort(key=lambda x: score_korean_sub_candidate(x, video_title=video_title), reverse=True)
             best_candidates = []
             for it in items[:5]:
                 fid = it.get("IDSubtitleFile")
@@ -215,7 +227,7 @@ class YifySubtitlesProvider(Provider):
                     is_smi = it.get("SubFormat", "").lower() == "smi" or b"<sync" in dl.content[:2000].lower()
                     norm_bytes = normalize_korean_subtitle_bytes(dl.content, is_smi=is_smi)
                     sample_txt = norm_bytes.decode("utf-8", errors="ignore")[:3000]
-                    q_score = score_korean_sub_candidate(it, sample_txt)
+                    q_score = score_korean_sub_candidate(it, sample_txt, video_title=video_title)
                     if q_score >= min_score:
                         rel_name = it.get("MovieReleaseName") or it.get("SubFileName") or "BluRay.1080p.x264"
                         best_candidates.append(
@@ -237,15 +249,20 @@ class YifySubtitlesProvider(Provider):
             logger.debug("OpenSubtitles REST Korean check error: %s", e)
             return results
 
-    def _query_opensubtitles_rest_korean(self, imdb_id):
+    def _query_opensubtitles_rest_korean(self, imdb_id, video_title=""):
         imdb_num = str(imdb_id).lstrip('t')
         os_url = f"https://rest.opensubtitles.org/search/imdbid-{imdb_num}/sublanguageid-kor"
-        return self._fetch_opensubtitles_candidates(os_url, min_score=150)
+        return self._fetch_opensubtitles_candidates(os_url, min_score=150, video_title=video_title)
 
-    def _query_opensubtitles_rest_korean_episode(self, imdb_id, season, episode):
+    def _query_opensubtitles_rest_korean_episode(self, imdb_id, season, episode, series_title=""):
         imdb_num = str(imdb_id).lstrip('t')
         os_url = f"https://rest.opensubtitles.org/search/episode-{int(episode)}/imdbid-{imdb_num}/season-{int(season)}/sublanguageid-kor"
-        return self._fetch_opensubtitles_candidates(os_url, min_score=80)
+        cands = self._fetch_opensubtitles_candidates(os_url, min_score=80, video_title=series_title)
+        if not cands and series_title:
+            from urllib.parse import quote
+            q_url = f"https://rest.opensubtitles.org/search/query-{quote(series_title)}/sublanguageid-kor"
+            cands = self._fetch_opensubtitles_candidates(q_url, min_score=80, video_title=series_title, filter_ep=episode)
+        return cands
 
     def _parse_row(self, row, languages, server_url):
         td = row.findAll('td')
@@ -264,10 +281,10 @@ class YifySubtitlesProvider(Provider):
 
         return []
 
-    def query(self, languages, imdb_id):
+    def query(self, languages, imdb_id, video_title=""):
         subtitles = []
         if any(l.alpha3 == 'kor' for l in languages):
-            os_subs = self._query_opensubtitles_rest_korean(imdb_id)
+            os_subs = self._query_opensubtitles_rest_korean(imdb_id, video_title=video_title)
             if os_subs:
                 subtitles.extend(os_subs)
 
@@ -298,9 +315,10 @@ class YifySubtitlesProvider(Provider):
             imdb_id = getattr(video, 'series_imdb_id', None) or getattr(video, 'imdb_id', None)
             if imdb_id and video.season is not None and video.episode is not None and any(l.alpha3 == 'kor' for l in languages):
                 ep_num = video.episode[0] if isinstance(video.episode, (list, tuple)) else video.episode
-                return self._query_opensubtitles_rest_korean_episode(imdb_id, video.season, ep_num)
+                series_title = getattr(video, 'series', '') or ''
+                return self._query_opensubtitles_rest_korean_episode(imdb_id, video.season, ep_num, series_title=series_title)
             return []
-        return self.query(languages, video.imdb_id) if isinstance(video, Movie) and video.imdb_id else []
+        return self.query(languages, video.imdb_id, video_title=getattr(video, 'title', '') or '') if isinstance(video, Movie) and video.imdb_id else []
 
     def download_subtitle(self, subtitle):
         if getattr(subtitle, "direct_srt_bytes", None):
