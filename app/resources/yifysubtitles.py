@@ -26,19 +26,26 @@ logger = logging.getLogger(__name__)
 def score_korean_sub_candidate(meta, content_sample=""):
     score = 100
     rel = (meta.get("MovieReleaseName", "") + " " + meta.get("SubFileName", "")).lower()
+    cmt = str(meta.get("SubAuthorComment", "") or "").lower()
     if any(bad in rel for bad in ("hdcam", "cam", "hdtc", ".tc.", "telesync", "캠버전", "김코난")):
         score -= 500
     if any(good in rel for good in ("bluray", "blu-ray", "remux", "web-dl", "webrip", "1080p", "2160p")):
         score += 100
-    if any(grp in rel for grp in ("sparks", "rarbg", "fgt", "amiable", "tigole")):
+    if any(grp in rel for grp in ("sparks", "rarbg", "fgt", "amiable", "tigole", "ethel", "zorosenpai")):
         score += 150
+    if any(r in cmt for r in ("retail", "릴맞춤", "내장자막", "공식")):
+        score += 200
+    if str(meta.get("SubAutoTranslation", "0")) == "1" or "ai자막" in cmt:
+        score -= 300
     if meta.get("SubFormat", "").lower() == "srt":
         score += 80
 
     if content_sample:
+        if len(re.findall(r"[가-힣]", content_sample)) < 30:
+            return -9999
         if any(spam in content_sample for spam in ("자막넷", "jamack.net", "첫 자막입니다", "설명충", "OpenSubtitles.org")):
             score -= 600
-        for bad_kr in ("맞칠건가", "옴겨", "됬지", "예아.", "음-흠", "자, 걱정하자", "볼 수 있니?"):
+        for bad_kr in ("맞칠건가", "옴겨", "됬지", "예아.", "음-흠", "자, 걱정하자", "볼 수 있니?", "세번째 코멘트"):
             if bad_kr in content_sample:
                 score -= 200
         for good_kr in ("쏘지 마", "됐지?", "잠깐만", "괜찮아", "안 돼", "할 수"):
@@ -313,13 +320,15 @@ class YifySubtitlesProvider(Provider):
 
     def _process_archive(self, archive_stream, subtitle):
         for file_name in archive_stream.namelist():
-            if file_name.lower().endswith(('.srt', '.sub')):
+            if file_name.lower().endswith(('.srt', '.sub', '.smi')):
                 raw = archive_stream.read(file_name)
-                subtitle.content = fix_line_ending(normalize_korean_subtitle_bytes(raw, is_smi=False))
-                if subtitle.is_valid():
-                    return
-            elif file_name.lower().endswith('.smi'):
-                raw = archive_stream.read(file_name)
-                subtitle.content = fix_line_ending(normalize_korean_subtitle_bytes(raw, is_smi=True))
+                is_smi = file_name.lower().endswith('.smi')
+                norm = fix_line_ending(normalize_korean_subtitle_bytes(raw, is_smi=is_smi))
+                if getattr(subtitle.language, 'alpha3', '') == 'kor':
+                    txt = norm.decode('utf-8', errors='ignore')
+                    if len(re.findall(r'[가-힣]', txt)) < 30:
+                        logger.warning('Rejected fake Korean subtitle (no Hangul found): %r', file_name)
+                        continue
+                subtitle.content = norm
                 if subtitle.is_valid():
                     return

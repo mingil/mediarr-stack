@@ -159,7 +159,7 @@ def provision_bazarr_config(
     general["movie_default_enabled"] = True
     general["minimum_score_movie"] = 50
     general["minimum_score"] = 60
-    general["hi_extension"] = ""
+    general["hi_extension"] = "hi"
     general["use_postprocessing"] = True
     general["postprocessing_cmd"] = (
         '/lsiopy/bin/python3 /config/plex_sub_autofix.py "{{directory}}" "{{subtitles}}" "{{subtitles_language_code2}}"'
@@ -187,8 +187,10 @@ def provision_bazarr_config(
 
     subsync_sec = data.setdefault("subsync", {})
     subsync_sec["use_subsync"] = True
-    subsync_sec["use_subsync_threshold"] = True
-    subsync_sec["subsync_threshold"] = 90
+    subsync_sec["use_subsync_threshold"] = False
+    subsync_sec["subsync_threshold"] = 99
+    subsync_sec["use_subsync_movie_threshold"] = False
+    subsync_sec["subsync_movie_threshold"] = 99
 
     cfg_file.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
     _safe_chown_chmod(cfg_file, puid, pgid, is_dir=False)
