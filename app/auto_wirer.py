@@ -206,6 +206,15 @@ def provision_bazarr_config(
             except Exception:
                 pass
 
+    try:
+        creds = discover_credentials(docker_root)
+        if creds.get("plex_token"):
+            tok_path = docker_root / "bazarr/.plex_token"
+            tok_path.write_text(creds["plex_token"], encoding="utf-8")
+            _safe_chown_chmod(tok_path, puid, pgid, is_dir=False)
+    except Exception:
+        pass
+
     return "Bazarr: 공식 블루레이/VOD 한국어 자막 품질 엔진, Sonarr·Radarr 연동 및 Plex 자동 자막 선택 후처리 설정 완료"
 
 

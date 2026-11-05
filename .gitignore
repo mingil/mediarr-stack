@@ -13,3 +13,13 @@ legacy-backup/qbittorrent_gluetun/
 legacy-backup/plexhw-compose.yaml
 @eaDir/
 *.log
+
+# Auto-added privacy & self-hosting protection
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+node_modules/
+*.pem
+*.key

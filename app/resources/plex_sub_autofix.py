@@ -8,7 +8,22 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 PLEX_URL = os.environ.get("PLEX_URL", "http://172.17.0.1:32400")
-PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "yns1REZh8vrmyMzqEWot")
+
+
+def _load_plex_token() -> str:
+    env_tok = os.environ.get("PLEX_TOKEN", "").strip()
+    if env_tok:
+        return env_tok
+    tok_file = "/config/.plex_token"
+    if os.path.exists(tok_file):
+        try:
+            return open(tok_file, "r", encoding="utf-8").read().strip()
+        except Exception:
+            pass
+    return ""
+
+
+PLEX_TOKEN = _load_plex_token()
 
 # Self-heal yifysubtitles.py and Bazarr SQLite WAL concurrency settings if container was recreated
 try:

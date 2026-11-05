@@ -36,10 +36,14 @@
    - `Gluetun VPN` + `qBittorrent(:8181)` ➔ `[/data/torrents]` ➔ `Unpackerr` ➔ `Sonarr/Radarr` ➔ `[/data/media/{movies,tv,anime}]`
 3. **[파이프라인 3] TRaSH Guides 최고급 화질 프로필 & 한국어 우대 점수 일일 자동 동기화**
    - `Recyclarr` (`recyclarr.yml` 자동 생성) ➔ `Sonarr(:8989) & Radarr(:7878) API`
-4. **[파이프라인 4] 한국어 자막 AI 오디오 싱크 보정 ➔ 4K 포스터 배지 ➔ Plex HW + RAM 스트리밍**
-   - `Bazarr(:6767)` + `Kometa` ➔ `Plex(:32400)` + `Tautulli(:8182)` + `Maintainerr(:6246)`
-5. **[파이프라인 5] 통합 관제 센터(`mediarr-control-center`) 부팅 시 자동 프로비저닝 & 자가 치유 DB 닥터**
-   - `mediarr-control-center(:8500, kimmingil/mediarr-stack:latest)` 구동 즉시 전체 폴더 트리 생성, 설정 파일 생성, 잔여 PID 제거 및 SQLite DB 최적화를 수행합니다.
+4. **[파이프라인 4] 4단계 한국어 통합 자막 엔진(`yifysubtitles.py`) & AI 오디오 싱크 보정 ➔ Plex 자동 자막 선택(`selected=1`)**
+   - `Bazarr(:6767)` + `smi2srt` + `plex_sub_autofix.py` ➔ `Plex(:32400)` + `Tautulli(:8182)` + `Maintainerr(:6246)`
+   - **1단계:** OpenSubtitles 공식 블루레이/VOD 한국어 자막 탐색 및 `.smi`/`.ass` ➔ `.srt` 자동 변환 (기계번역·캠버전 싱크 배제)
+   - **2단계-A:** 국내 애니메이션 자막 아카이브(티스토리 카카오CDN `.zip` 패키지) 자동 탐색 및 시즌·절대회차 매칭
+   - **2단계-B:** 곰플레이어(`gomlab.com`) 공식 한국어 자막 자료실 자동 조회·변환
+   - **3/4단계:** 최신 동시방영작 내장 대사 트랙(`ffprobe`/`ffmpeg`) 추출 + 애니메이션 고유명사 사전(`ANIME_PRE_GLOSSARY`) 기반 신경망 번역 및 오디오 파형 싱크(`Subsync`), 완료 즉시 Plex 라이브러리 새로고침 및 한국어 자막 자동 선택(`selected=1`)
+5. **[파이프라인 5] 통합 관제 센터(`mediarr-control-center`) 부팅 시 Zero-Touch 자동 프로비저닝 & SQLite WAL 무잠금 자가 치유**
+   - `mediarr-control-center(:8500, kimmingil/mediarr-stack:latest)` 구동 즉시 전체 폴더 트리 생성, Seerr·Sonarr·Radarr·Prowlarr·Bazarr·qBittorrent API 자동 배선, `Nyaa.si` 애니메이션 인덱서 정밀 튜닝(외국어 하드자막 차단 및 절대회차 파싱 보호), 캠버전(`CAM`/`TS`/`TELESYNC`) 원천 차단, 잔여 PID 제거 및 전 서비스 SQLite `WAL` 동시성 최적화를 수행합니다.
 
 ---
 
