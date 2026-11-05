@@ -225,9 +225,7 @@ def provision_seerr_settings(
     net_sec = data.setdefault("network", {})
     net_sec["forceIpv4First"] = True
     dns_sec = net_sec.setdefault("dnsCache", {})
-    dns_sec["enabled"] = True
-    dns_sec["forceMinTtl"] = 300
-    dns_sec["forceMaxTtl"] = 3600
+    dns_sec["enabled"] = False
 
     plex_sec = data.setdefault("plex", {})
     plex_sec.setdefault("name", "Plex Media Server")
