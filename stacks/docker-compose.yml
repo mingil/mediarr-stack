@@ -446,6 +446,43 @@ services:
     logging: *default-logging
 
   # ---------------------------------------------------------------------------
+  # 🔄 10. SMI2SRT - 구형 .smi 자막을 UTF-8 .ko.srt로 자동 변환 (Plex 무트랜스코딩 Direct Play 보장)
+  # ---------------------------------------------------------------------------
+  smi2srt:
+    image: cpm0722/smi2srt:latest
+    container_name: mediarr-smi2srt
+    hostname: smi2srt
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      mediarr-control-center:
+        condition: service_healthy
+    networks:
+      mediarr_net:
+        aliases:
+          - smi2srt
+          - mediarr-smi2srt
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /volume1/docker/smi2srt:/smi2srt_data:rw
+      - /volume1/mediarr:/data:rw
+      - /volume1/torrents:/downloads:rw
+      - /volume1/video/movies:/movies:rw
+      - /volume1/video/tv_shows:/tv_shows:rw
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      LANG: ko_KR.UTF-8
+      LC_ALL: ko_KR.UTF-8
+      SMI2SRT_INTERVAL_SECONDS: "300"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "mkdir -p /smi2srt_data/log /smi2srt_data/smi_backup && ln -sfn /smi2srt_data/log /smi2srt_log && while true; do rm -f /smi2srt_log/time.bin; /smi2srt/smi2srt -ko -b /smi2srt_data/smi_backup /data/media /data/torrents /movies /tv_shows /downloads >/dev/null 2>&1 || true; chown -R ${PUID:-1026}:${PGID:-100} /data/media /data/torrents /smi2srt_data 2>/dev/null || true; chmod -R 775 /data/media /data/torrents 2>/dev/null || true; sleep ${SMI2SRT_INTERVAL_SECONDS:-300}; done"
+    restart: on-failure:5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
   # ♻️ 10. RECYCLARR - TRaSH Guides 최고급 화질 프로필 & 한국어 우대 자동 동기화
   # ---------------------------------------------------------------------------
   recyclarr:

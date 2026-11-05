@@ -37,6 +37,7 @@ class MediarrStackConfigRequest(BaseModel):
             "sonarr",
             "radarr",
             "bazarr",
+            "smi2srt",
             "recyclarr",
             "unpackerr",
             "tautulli",
@@ -646,7 +647,46 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "",
         ])
 
-    # 10. RECYCLARR
+    # 10. SMI2SRT (cpm0722/smi2srt)
+    if "smi2srt" in selected:
+        lines.extend([
+            "  # ---------------------------------------------------------------------------",
+            "  # 🔄 10. SMI2SRT - 구형 .smi 자막을 UTF-8 .ko.srt로 자동 변환 (Plex 무트랜스코딩 Direct Play 보장)",
+            "  # ---------------------------------------------------------------------------",
+            "  smi2srt:",
+            "    image: cpm0722/smi2srt:latest",
+            "    container_name: mediarr-smi2srt",
+            "    hostname: smi2srt",
+            *_wt_labels(wt),
+            *_depends_on_block(has_cc, need_gluetun=False),
+            "    networks:",
+            "      mediarr_net:",
+            "        aliases:",
+            "          - smi2srt",
+            "          - mediarr-smi2srt",
+            "    mem_limit: 256m",
+            "    security_opt:",
+            "      - no-new-privileges:true",
+            "    volumes:",
+            f"      - {docker_root}/smi2srt:/smi2srt_data:rw",
+            f"      - {data_root}:/data:rw",
+            f"      - {legacy_torrents}:/downloads:rw",
+            f"      - {legacy_video}/movies:/movies:rw",
+            f"      - {legacy_video}/tv_shows:/tv_shows:rw",
+            "    environment:",
+            f"      TZ: ${{TZ:-{cfg.tz}}}",
+            "      LANG: ko_KR.UTF-8",
+            "      LC_ALL: ko_KR.UTF-8",
+            '      SMI2SRT_INTERVAL_SECONDS: "300"',
+            '    entrypoint: ["/bin/sh", "-c"]',
+            "    command:",
+            f'      - "mkdir -p /smi2srt_data/log /smi2srt_data/smi_backup && ln -sfn /smi2srt_data/log /smi2srt_log && while true; do rm -f /smi2srt_log/time.bin; /smi2srt/smi2srt -ko -b /smi2srt_data/smi_backup /data/media /data/torrents /movies /tv_shows /downloads >/dev/null 2>&1 || true; chown -R ${{PUID:-{cfg.puid}}}:${{PGID:-{cfg.pgid}}} /data/media /data/torrents /smi2srt_data 2>/dev/null || true; chmod -R 775 /data/media /data/torrents 2>/dev/null || true; sleep ${{SMI2SRT_INTERVAL_SECONDS:-300}}; done"',
+            "    restart: on-failure:5",
+            "    logging: *default-logging",
+            "",
+        ])
+
+    # 11. RECYCLARR
     if "recyclarr" in selected:
         lines.extend([
             "  # ---------------------------------------------------------------------------",
@@ -1026,7 +1066,7 @@ PUID={cfg.puid}
 PGID={cfg.pgid}
 
 echo ">>> [1/4] 도커 컨테이너 설정 디렉토리 생성 중 ($DOCKER_ROOT)..."
-mkdir -p "$DOCKER_ROOT"/{{gluetun,qbittorrent,plexhw,seerr,prowlarr,flaresolverr,sonarr,radarr,bazarr,recyclarr,unpackerr,tautulli,kometa,maintainerr,_backups/mediarr-stack}}
+mkdir -p "$DOCKER_ROOT"/{{gluetun,qbittorrent,plexhw,seerr,prowlarr,flaresolverr,sonarr,radarr,bazarr,smi2srt,smi2srt/log,smi2srt/smi_backup,recyclarr,unpackerr,tautulli,kometa,maintainerr,_backups/mediarr-stack}}
 
 echo ">>> [2/4] TRaSH Guides 표준 단일 볼륨 하드링크 폴더 트리 생성 중 ($DATA_ROOT)..."
 mkdir -p "$DATA_ROOT"/torrents/{{movies,tv,anime,music}}
@@ -1036,7 +1076,7 @@ echo ">>> [3/4] 좀비 Plex PID 파일 점검 및 정리 중..."
 rm -f "$DOCKER_ROOT/plexhw/Library/Application Support/Plex Media Server/plexmediaserver.pid" 2>/dev/null || true
 
 echo ">>> [4/4] 시놀로지 파일 시스템 소유권($PUID:$PGID) 및 권한(775) 최적화 중..."
-chown -R $PUID:$PGID "$DOCKER_ROOT"/{{gluetun,qbittorrent,plexhw,seerr,prowlarr,flaresolverr,sonarr,radarr,bazarr,recyclarr,unpackerr,tautulli,kometa,maintainerr,_backups}}
+chown -R $PUID:$PGID "$DOCKER_ROOT"/{{gluetun,qbittorrent,plexhw,seerr,prowlarr,flaresolverr,sonarr,radarr,bazarr,smi2srt,recyclarr,unpackerr,tautulli,kometa,maintainerr,_backups}}
 chown -R $PUID:$PGID "$DATA_ROOT"
 chmod -R 775 "$DATA_ROOT"
 

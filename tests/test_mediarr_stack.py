@@ -56,7 +56,8 @@ def test_diagnosis_and_catalog_no_marius_no_watchtower():
     service_ids = [s["id"] for s in cat["services"]]
     assert "watchtower" not in service_ids
     assert "mediarr-control-center" in service_ids
-    assert len(service_ids) == 15
+    assert "smi2srt" in service_ids
+    assert len(service_ids) == 16
 
     for svc in cat["services"]:
         assert "marius" not in svc["container_name"].lower()
@@ -85,8 +86,10 @@ def test_generate_full_compose_organic_integration():
     assert "mediarr_net" in parsed["networks"]
     services = parsed["services"]
     assert "watchtower" not in services
-    assert len(services) == 15
+    assert len(services) == 16
     assert "mediarr-control-center" in services
+    assert "smi2srt" in services
+    assert services["smi2srt"]["image"] == "cpm0722/smi2srt:latest"
 
     # Verify Watchtower labels on all services and depends-on=mediarr-gluetun on VPN-routed services
     for svc_name, svc_def in services.items():
@@ -270,4 +273,42 @@ def test_zero_touch_auto_wirer_files_and_rest_apis(tmp_path: Path):
     assert len(p_logs) == 4  # FlareSolverr Proxy, Sonarr FullSync, Radarr FullSync, Starter Indexers
     assert "{tvdb-{TvdbId}}" in TRASH_SONARR_NAMING["seriesFolderFormat"]
     assert "{tmdb-{TmdbId}}" in TRASH_RADARR_NAMING["movieFolderFormat"]
+
+
+def test_smi2srt_korean_encoding_and_backup_engine(tmp_path: Path):
+    from app.smi2srt_engine import scan_and_convert_smi_directories
+
+    docker_root = tmp_path / "docker"
+    data_root = tmp_path / "mediarr"
+    movie_dir = data_root / "media/movies/Oldboy (2003)"
+    movie_dir.mkdir(parents=True)
+    docker_root.mkdir(parents=True)
+
+    sample_smi = (
+        "<SAMI>\n<HEAD><TITLE>Oldboy</TITLE></HEAD>\n<BODY>\n"
+        "<SYNC Start=1500><P Class=KRCC>누구냐 넌?<br><font color=yellow>15년 동안 감금되었다.</font>\n"
+        "<SYNC Start=4200><P Class=KRCC>&nbsp;\n"
+        "<SYNC Start=5000><P Class=KRCC>웃어라, 온 세상이 너와 함께 웃을 것이다.\n"
+        "<SYNC Start=8500><P Class=KRCC>&nbsp;\n"
+        "</BODY>\n</SAMI>\n"
+    )
+    # Write in legacy Korean CP949 encoding to verify zero-broken-Korean conversion
+    smi_file = movie_dir / "Oldboy.2003.1080p.smi"
+    smi_file.write_bytes(sample_smi.encode("cp949"))
+
+    res = scan_and_convert_smi_directories(docker_root=docker_root, data_root=data_root)
+    assert res["status"] == "ok"
+    assert res["converted_count"] == 1
+
+    srt_file = movie_dir / "Oldboy.2003.1080p.ko.srt"
+    assert srt_file.exists()
+    srt_text = srt_file.read_text(encoding="utf-8")
+    assert "00:00:01,500 --> 00:00:04,200" in srt_text
+    assert "누구냐 넌?\n15년 동안 감금되었다." in srt_text
+    assert "웃어라, 온 세상이 너와 함께 웃을 것이다." in srt_text
+
+    # Original .smi should be moved to smi_backup so Plex never burns in .smi subtitles
+    assert not smi_file.exists()
+    backed_up_smi = docker_root / "smi2srt/smi_backup/media/movies/Oldboy (2003)/Oldboy.2003.1080p.smi"
+    assert backed_up_smi.exists()
 

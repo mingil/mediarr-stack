@@ -38,6 +38,7 @@ from app.runtime_manager import (
     bootstrap_host_environment,
     run_sqlite_maintenance_and_backup,
 )
+from app.smi2srt_engine import scan_and_convert_smi_directories
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -46,17 +47,18 @@ LEGACY_DIR = BASE_DIR / "legacy-backup"
 
 
 async def _periodic_maintenance_loop(interval_hours: float) -> None:
-    """Background loop inside mediarr-control-center: continuously auto-wires services after boot, and runs 24h DB optimization."""
+    """Background loop inside mediarr-control-center: continuously auto-wires services, converts .smi->.ko.srt, and runs 24h DB optimization."""
     # Phase 1: First 10 minutes after boot — run every 30s so newly pulled/booted containers are wired immediately
     for _ in range(20):
         await asyncio.sleep(30.0)
         try:
             await asyncio.to_thread(bootstrap_host_environment)
             await auto_wire_all_services()
+            await asyncio.to_thread(scan_and_convert_smi_directories)
         except Exception:
             pass
 
-    # Phase 2: Steady state — check auto-wiring every 10 minutes, run SQLite VACUUM & backup every interval_hours
+    # Phase 2: Steady state — check auto-wiring & SMI->SRT every 10 minutes, run SQLite VACUUM & backup every interval_hours
     wire_interval = 600.0
     maint_interval = max(3600.0, interval_hours * 3600.0)
     elapsed_since_maint = 0.0
@@ -66,6 +68,7 @@ async def _periodic_maintenance_loop(interval_hours: float) -> None:
         try:
             await asyncio.to_thread(bootstrap_host_environment)
             await auto_wire_all_services()
+            await asyncio.to_thread(scan_and_convert_smi_directories)
             if elapsed_since_maint >= maint_interval:
                 await asyncio.to_thread(run_sqlite_maintenance_and_backup)
                 elapsed_since_maint = 0.0
@@ -168,18 +171,18 @@ async def get_catalog() -> Dict[str, Any]:
     presets = [
         {
             "id": "ultimate_full",
-            "name": "🏆 현존 최고 완벽 통합 스택 (관제 센터 + 14대 미디어 서비스 전체)",
+            "name": "🏆 현존 최고 완벽 통합 스택 (관제 센터 + 15대 미디어 서비스 전체)",
             "badge": "단일 프로젝트 풀 구성",
             "use_vpn": True,
-            "description": "Mediarr Control Center(:8500) + Gluetun(Surfshark VPN) + qBittorrent(:8181) + Plex(4K HW+RAM) + Seerr + Prowlarr + FlareSolverr + Sonarr + Radarr + Bazarr + Recyclarr + Unpackerr + Tautulli + Kometa + Maintainerr",
+            "description": "Mediarr Control Center(:8500) + Gluetun(Surfshark VPN) + qBittorrent(:8181) + Plex(4K HW+RAM) + Seerr + Prowlarr + FlareSolverr + Sonarr + Radarr + Bazarr + smi2srt(무트랜스코딩 자막 변환) + Recyclarr + Unpackerr + Tautulli + Kometa + Maintainerr",
             "services": [s["id"] for s in MEDIARR_SERVICES_CATALOG],
         },
         {
             "id": "core_vpn",
-            "name": "⚡ 핵심 10종 스마트 자동화 스택 (관제 센터 + 필수 9대장)",
+            "name": "⚡ 핵심 11종 스마트 자동화 스택 (관제 센터 + 필수 10대장)",
             "badge": "가장 많이 쓰는 실사용 구성",
             "use_vpn": True,
-            "description": "Mediarr Control Center + 기존 PlexHW + Gluetun + qBittorrent(:8181) + Seerr + Prowlarr + FlareSolverr + Sonarr + Radarr + Bazarr 핵심 구성",
+            "description": "Mediarr Control Center + 기존 PlexHW + Gluetun + qBittorrent(:8181) + Seerr + Prowlarr + FlareSolverr + Sonarr + Radarr + Bazarr + smi2srt 핵심 구성",
             "services": [
                 "mediarr-control-center",
                 "gluetun",
@@ -191,6 +194,7 @@ async def get_catalog() -> Dict[str, Any]:
                 "sonarr",
                 "radarr",
                 "bazarr",
+                "smi2srt",
             ],
         },
         {
@@ -209,6 +213,7 @@ async def get_catalog() -> Dict[str, Any]:
                 "sonarr",
                 "radarr",
                 "bazarr",
+                "smi2srt",
                 "recyclarr",
                 "unpackerr",
                 "tautulli",
@@ -267,12 +272,14 @@ async def generate_stack(cfg: MediarrStackConfigRequest) -> Dict[str, Any]:
 
 @app.post("/api/runtime/bootstrap")
 async def trigger_runtime_bootstrap() -> Dict[str, Any]:
-    """Trigger immediate directory creation, stale Plex PID removal, and Recyclarr/Kometa config generation."""
+    """Trigger immediate directory creation, stale Plex PID removal, SMI->SRT conversion, and Recyclarr/Kometa config generation."""
     boot = bootstrap_host_environment()
     wire = await auto_wire_all_services()
+    smi_res = scan_and_convert_smi_directories()
     return {
         **boot,
         "auto_wire": wire,
+        "smi2srt": smi_res,
     }
 
 
@@ -281,6 +288,12 @@ async def trigger_runtime_autowire() -> Dict[str, Any]:
     """Trigger Zero-Touch REST API & Config Auto-Wirer for Sonarr, Radarr, Prowlarr, Bazarr, and qBittorrent."""
     bootstrap_host_environment()
     return await auto_wire_all_services()
+
+
+@app.post("/api/runtime/smi2srt")
+async def trigger_runtime_smi2srt() -> Dict[str, Any]:
+    """Trigger immediate SMI -> UTF-8 .ko.srt subtitle conversion across media & torrent folders."""
+    return scan_and_convert_smi_directories()
 
 
 @app.post("/api/runtime/maintenance")

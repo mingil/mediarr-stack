@@ -162,6 +162,9 @@ def bootstrap_host_environment(
         "sonarr",
         "radarr",
         "bazarr",
+        "smi2srt",
+        "smi2srt/log",
+        "smi2srt/smi_backup",
         "recyclarr",
         "unpackerr",
         "tautulli",
@@ -171,7 +174,7 @@ def bootstrap_host_environment(
         "_backups/mediarr-stack",
     ]
     if d_root.exists():
-        non_root_strict_dirs = {"seerr", "recyclarr", "unpackerr", "kometa", "maintainerr", "bazarr", "qbittorrent", "gluetun"}
+        non_root_strict_dirs = {"seerr", "smi2srt", "recyclarr", "unpackerr", "kometa", "maintainerr", "bazarr", "qbittorrent", "gluetun"}
         for sub in config_subdirs:
             target_dir = d_root / sub
             target_dir.mkdir(parents=True, exist_ok=True)

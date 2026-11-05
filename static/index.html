@@ -48,6 +48,9 @@
         <button onclick="runRuntimeAutoWire()" class="px-3.5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-semibold text-white transition shadow-lg shadow-purple-600/25">
           ⚡ 세부 옵션·네이밍·API 원클릭 자동 세팅
         </button>
+        <button onclick="runRuntimeSmi2Srt()" class="px-3.5 py-2 rounded-lg bg-pink-600 hover:bg-pink-500 text-xs font-semibold text-white transition shadow-lg shadow-pink-600/25">
+          💬 SMI ➔ SRT 즉시 변환 (무트랜스코딩)
+        </button>
         <button onclick="runRuntimeBootstrap()" class="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition shadow-lg shadow-indigo-600/25">
           🚀 폴더·설정 자동 초기화
         </button>
@@ -433,6 +436,11 @@
     async function runRuntimeMaintenance() {
       const res = await fetch('/api/runtime/maintenance', { method: 'POST' }).then(r => r.json());
       showRuntimeAlert(`🩺 ${res.summary}`);
+    }
+
+    async function runRuntimeSmi2Srt() {
+      const res = await fetch('/api/runtime/smi2srt', { method: 'POST' }).then(r => r.json());
+      showRuntimeAlert(`💬 ${res.summary}`);
     }
 
     async function downloadBundle() {
