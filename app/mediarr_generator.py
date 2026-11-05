@@ -170,7 +170,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "      RADARR_API_KEY: ${RADARR_API_KEY:-}",
             "      TMDB_API_KEY: ${TMDB_API_KEY:-}",
             "    ports:",
-            '      - "8500:8500"',
+            '      - "8585:8500"',
             "    volumes:",
             f"      - {docker_root}:/host-docker:rw",
             f"      - {data_root}:/host-data:rw",
@@ -187,9 +187,7 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
 
     # 1. GLUETUN VPN GATEWAY
     if vpn_active:
-        gluetun_ports = [
-            '      - "8000:8000/tcp"   # Gluetun 내장 컨트롤 서버',
-        ]
+        gluetun_ports = []
         gluetun_aliases = [
             "          - gluetun",
             "          - mediarr-gluetun",

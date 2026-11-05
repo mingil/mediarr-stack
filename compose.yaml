@@ -57,7 +57,7 @@ services:
       RADARR_API_KEY: ${RADARR_API_KEY:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     ports:
-      - "8500:8500"
+      - "8585:8500"
     volumes:
       - /volume1/docker:/host-docker:rw
       - /volume1/mediarr:/host-data:rw
@@ -101,7 +101,6 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "8000:8000/tcp"   # Gluetun 내장 컨트롤 서버
       - "8181:8181/tcp"   # qBittorrent Web UI (기존 8181 포트 호환)
       - "6881:6881/tcp"   # qBittorrent 토렌트 피어 포트 (TCP)
       - "6881:6881/udp"   # qBittorrent 토렌트 피어 포트 (UDP)
