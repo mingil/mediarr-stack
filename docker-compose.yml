@@ -249,6 +249,7 @@ services:
       PGID: ${PGID:-100}
       LOG_LEVEL: info
       PORT: 5055
+      NODE_OPTIONS: "--require /app/config/seerr-turbo.js"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5055/api/v1/status >/dev/null 2>&1 || nc -z 127.0.0.1 5055 >/dev/null 2>&1 || exit 1"]
       interval: 30s
