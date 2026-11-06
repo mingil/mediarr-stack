@@ -68,6 +68,34 @@
     <!-- Runtime Action Toast Banner -->
     <div id="runtimeAlert" class="hidden glass rounded-xl p-4 border-l-4 border-emerald-400 text-sm text-emerald-200"></div>
 
+    <!-- Top Quick Launcher & External Domain / LAN Mode Switcher -->
+    <section class="glass rounded-2xl p-5 border-l-4 border-cyan-400">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
+        <div>
+          <h2 class="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
+            <span>🚀 통합 Mediarr 서비스 원클릭 런처 &amp; 외부 도메인(HTTPS) / 내부망(LAN) 자동 스위치</span>
+          </h2>
+          <p class="text-xs text-slate-300 mt-1">
+            외부에서 역방향 프록시 도메인(예: <code>*.gil9393.synology.me</code>)으로 접속하면 VPN이나 Tailscale 없이도 모든 미디어 컨테이너 링크가 <strong>HTTPS 외부 도메인 주소</strong>로 자동 연결됩니다.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 shrink-0">
+          <div class="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-1">
+            <button id="modeBtnExternal" onclick="setLinkMode('external')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition bg-cyan-600 text-white">
+              🌐 외부 도메인 (HTTPS)
+            </button>
+            <button id="modeBtnLan" onclick="setLinkMode('lan')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white">
+              🏠 내부망 (LAN IP)
+            </button>
+          </div>
+          <button onclick="probeNasServices()" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition">
+            🔄 상태 새로고침
+          </button>
+        </div>
+      </div>
+      <div id="topQuickLaunchGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
+    </section>
+
     <!-- Summary KPI Cards -->
     <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
       <div class="glass rounded-xl p-4">
@@ -158,8 +186,12 @@
 
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="text-xs text-slate-400 block mb-1">시놀로지 NAS IP</label>
-              <input id="cfgNasIp" type="text" value="192.168.0.100" class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-white" />
+              <label class="text-xs text-slate-400 block mb-1">시놀로지 NAS IP (내부망)</label>
+              <input id="cfgNasIp" type="text" value="192.168.0.100" onchange="regenerateCompose(); probeNasServices();" class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-white" />
+            </div>
+            <div>
+              <label class="text-xs text-cyan-300 block mb-1">외부 접속 도메인 (Reverse Proxy)</label>
+              <input id="cfgBaseDomain" type="text" placeholder="예: gil9393.synology.me" value="" onchange="renderCatalog(catalogData.services); renderWiring(generatedData.wiring_guide || []); probeNasServices();" class="w-full rounded-lg bg-slate-900 border border-cyan-700/60 px-3 py-1.5 text-xs text-white" />
             </div>
             <div>
               <label class="text-xs text-slate-400 block mb-1">qBittorrent 포트</label>
@@ -258,6 +290,48 @@
     let generatedData = {};
     let activeCodeKey = 'docker_compose';
     let selectedServices = [];
+    let linkMode = 'external'; // 'external' or 'lan'
+
+    function detectBaseDomain(defaultFromServer) {
+      const host = (window.location.hostname || '').trim();
+      const isIpOrLocal = !host || host === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(host);
+      if (!isIpOrLocal && host.includes('.')) {
+        const parts = host.split('.');
+        if (parts.length >= 3) {
+          return parts.slice(1).join('.');
+        }
+      }
+      return (defaultFromServer || '').trim();
+    }
+
+    function setLinkMode(mode) {
+      linkMode = mode;
+      const btnExt = document.getElementById('modeBtnExternal');
+      const btnLan = document.getElementById('modeBtnLan');
+      if (mode === 'external') {
+        btnExt.className = 'px-3 py-1.5 rounded-lg text-xs font-bold transition bg-cyan-600 text-white';
+        btnLan.className = 'px-3 py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white';
+      } else {
+        btnLan.className = 'px-3 py-1.5 rounded-lg text-xs font-bold transition bg-indigo-600 text-white';
+        btnExt.className = 'px-3 py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white';
+      }
+      if (catalogData) renderCatalog(catalogData.services);
+      if (generatedData && generatedData.wiring_guide) renderWiring(generatedData.wiring_guide);
+      probeNasServices();
+    }
+
+    function getServiceUrl(s) {
+      const nasIp = (document.getElementById('cfgNasIp')?.value || '192.168.0.100').trim();
+      const baseDomain = (document.getElementById('cfgBaseDomain')?.value || '').trim().replace(/^\.+/, '');
+      const path = s.webui_path || '';
+      if (linkMode === 'external' && baseDomain && s.subdomain) {
+        return `https://${s.subdomain}.${baseDomain}${path}`;
+      }
+      if (s.webui_port) {
+        return `http://${nasIp}:${s.webui_port}${path}`;
+      }
+      return '';
+    }
 
     async function initApp() {
       const [catRes, diagRes] = await Promise.all([
@@ -265,10 +339,20 @@
         fetch('/api/diagnosis').then(r => r.json()),
       ]);
       catalogData = catRes;
+      if (catRes.default_nas_ip) {
+        document.getElementById('cfgNasIp').value = catRes.default_nas_ip;
+      }
+      const detectedDomain = detectBaseDomain(catRes.default_base_domain);
+      if (detectedDomain) {
+        document.getElementById('cfgBaseDomain').value = detectedDomain;
+        linkMode = 'external';
+      } else {
+        linkMode = 'lan';
+      }
       selectedServices = catRes.services.map(s => s.id);
       renderDiagnosis(diagRes);
       renderPipelines(catRes.organic_pipelines);
-      renderCatalog(catRes.services);
+      setLinkMode(linkMode);
       await regenerateCompose();
     }
 
@@ -324,22 +408,32 @@
 
     function renderCatalog(services) {
       const container = document.getElementById('catalogGrid');
-      container.innerHTML = services.map(s => `
-        <div class="rounded-xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between space-y-3">
-          <div>
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-sm font-bold text-white">${s.name}</span>
-              <span class="text-[11px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">${s.port ? ':' + s.port : '백그라운드'}</span>
+      container.innerHTML = services.map(s => {
+        const svcUrl = getServiceUrl(s);
+        const openBtn = (svcUrl && s.id !== 'flaresolverr')
+          ? `<a href="${svcUrl}" target="_blank" class="text-[11px] font-bold px-2.5 py-0.5 rounded bg-cyan-600/30 hover:bg-cyan-500/50 text-cyan-200 border border-cyan-500/40 transition">웹 열기 ↗</a>`
+          : '';
+        return `
+          <div class="rounded-xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between space-y-3">
+            <div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-sm font-bold text-white">${s.name}</span>
+                <div class="flex items-center gap-1.5">
+                  ${openBtn}
+                  <span class="text-[11px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">${s.port ? ':' + s.port : '백그라운드'}</span>
+                </div>
+              </div>
+              <div class="text-[11px] text-amber-300 font-mono mt-0.5">컨테이너명: ${s.container_name}</div>
+              ${svcUrl ? `<div class="text-[11px] text-cyan-300 font-mono mt-0.5 truncate">${svcUrl}</div>` : ''}
+              <div class="inline-block mt-1.5 px-2 py-0.5 text-[10px] rounded bg-slate-800 text-slate-300">${s.role_badge}</div>
+              <p class="text-xs text-slate-400 mt-2 leading-relaxed">${s.description}</p>
             </div>
-            <div class="text-[11px] text-amber-300 font-mono mt-0.5">컨테이너명: ${s.container_name}</div>
-            <div class="inline-block mt-1.5 px-2 py-0.5 text-[10px] rounded bg-slate-800 text-slate-300">${s.role_badge}</div>
-            <p class="text-xs text-slate-400 mt-2 leading-relaxed">${s.description}</p>
+            <div class="text-[11px] text-emerald-300 bg-slate-950/70 rounded-lg p-2 border border-slate-800">
+              💡 ${s.setup_notes}
+            </div>
           </div>
-          <div class="text-[11px] text-emerald-300 bg-slate-950/70 rounded-lg p-2 border border-slate-800">
-            💡 ${s.setup_notes}
-          </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
     function applyPreset(presetId) {
@@ -461,25 +555,41 @@
 
     async function probeNasServices() {
       const cfg = getFormConfig();
+      const baseDomain = (document.getElementById('cfgBaseDomain')?.value || '').trim().replace(/^\.+/, '');
       const grid = document.getElementById('probeResultsGrid');
+      const topGrid = document.getElementById('topQuickLaunchGrid');
       grid.classList.remove('hidden');
       grid.innerHTML = '<div class="text-xs text-slate-400">포트 응답 확인 중...</div>';
       const res = await fetch('/api/probe-services', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nas_ip: cfg.nas_ip }),
+        body: JSON.stringify({ nas_ip: cfg.nas_ip, base_domain: baseDomain, link_mode: linkMode }),
       }).then(r => r.json());
       grid.innerHTML = res.results.map(r => `
-        <div class="rounded-lg bg-slate-900 border border-slate-800 p-3 flex items-center justify-between">
-          <div>
-            <div class="text-xs font-bold text-white">${r.name}</div>
-            <div class="text-[11px] font-mono text-slate-400">${r.url}</div>
+        <a href="${r.url}" target="_blank" class="rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-400/70 transition p-3 flex items-center justify-between group">
+          <div class="truncate pr-2">
+            <div class="text-xs font-bold text-white group-hover:text-cyan-300 transition">${r.name}</div>
+            <div class="text-[11px] font-mono text-cyan-300 truncate">${r.url}</div>
           </div>
-          <span class="px-2 py-0.5 text-[11px] rounded font-bold ${r.reachable ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}">
+          <span class="px-2 py-0.5 text-[11px] rounded font-bold shrink-0 ${r.reachable ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}">
             ${r.status_text}
           </span>
-        </div>
+        </a>
       `).join('');
+      if (topGrid) {
+        topGrid.innerHTML = res.results
+          .filter(r => r.id !== 'flaresolverr')
+          .map(r => `
+            <a href="${r.url}" target="_blank" class="p-3 rounded-xl bg-slate-900/95 border ${r.reachable ? 'border-cyan-500/40' : 'border-slate-800'} hover:border-cyan-400 hover:bg-slate-800/80 transition block group">
+              <div class="flex items-center justify-between gap-1">
+                <span class="text-xs font-bold text-white group-hover:text-cyan-300 truncate">${r.name}</span>
+                <span class="text-[10px] text-cyan-400 shrink-0">↗</span>
+              </div>
+              <div class="text-[10px] font-mono text-cyan-300/90 mt-1 truncate">${r.url.replace(/^https?:\/\//, '')}</div>
+              <div class="text-[10px] text-emerald-400/90 mt-0.5 truncate">${r.status_text}</div>
+            </a>
+          `).join('');
+      }
     }
 
     window.addEventListener('DOMContentLoaded', initApp);

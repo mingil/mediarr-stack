@@ -143,6 +143,8 @@ async def basic_auth_middleware(request: Request, call_next):
 
 class ProbeRequest(BaseModel):
     nas_ip: str = "192.168.0.100"
+    base_domain: str = ""
+    link_mode: str = "auto"  # "external", "lan", or "auto"
     services: List[str] = [
         "mediarr-control-center",
         "plex",
@@ -255,6 +257,8 @@ async def get_catalog() -> Dict[str, Any]:
         "presets": presets,
         "organic_pipelines": ORGANIC_PIPELINES,
         "diagnosis": DIAGNOSIS_REPORT,
+        "default_nas_ip": os.environ.get("NAS_IP", "192.168.0.100"),
+        "default_base_domain": os.environ.get("BASE_DOMAIN", ""),
     }
 
 
@@ -361,9 +365,11 @@ async def download_bundle(cfg: MediarrStackConfigRequest) -> StreamingResponse:
 
 @app.post("/api/probe-services")
 async def probe_services(req: ProbeRequest) -> Dict[str, Any]:
-    """Probe target NAS IP ports to check if any Mediarr stack services are currently online."""
+    """Probe target NAS IP ports (and internal Docker DNS fallback) and return LAN & External HTTPS URLs."""
     results = []
     svc_map = {s["id"]: s for s in MEDIARR_SERVICES_CATALOG}
+    base_domain = (req.base_domain or os.environ.get("BASE_DOMAIN", "")).strip().lstrip(".")
+    use_external = bool(base_domain) and req.link_mode != "lan"
 
     async with httpx.AsyncClient(timeout=2.0, follow_redirects=True) as client:
         for svc_id in req.services:
@@ -371,28 +377,46 @@ async def probe_services(req: ProbeRequest) -> Dict[str, Any]:
             if not svc or not svc.get("webui_port"):
                 continue
             port = svc["webui_port"]
+            container_name = svc["container_name"]
+            hostname = svc.get("hostname", container_name)
+            subdomain = svc.get("subdomain", "")
             path = svc.get("webui_path", "")
-            url = f"http://{req.nas_ip}:{port}{path}"
-            try:
-                resp = await client.get(url)
-                reachable = resp.status_code < 500
-                status_text = f"HTTP {resp.status_code} (정상 가동 중)"
-            except Exception:
-                reachable = False
-                status_text = "대기 중 (배포 전 또는 외부 망)"
+            lan_url = f"http://{req.nas_ip}:{port}{path}"
+            external_url = f"https://{subdomain}.{base_domain}{path}" if (base_domain and subdomain) else ""
+            primary_url = external_url if (use_external and external_url) else lan_url
+
+            reachable = False
+            status_text = "대기 중 (배포 전 또는 외부 망)"
+            for probe_url in (lan_url, f"http://{hostname}:{port}{path}", f"http://host.docker.internal:{port}{path}"):
+                try:
+                    resp = await client.get(probe_url)
+                    if resp.status_code < 500:
+                        reachable = True
+                        status_text = f"HTTP {resp.status_code} (정상 가동 중)"
+                        break
+                except Exception:
+                    continue
 
             results.append(
                 {
                     "id": svc_id,
                     "name": svc["name"],
-                    "container_name": svc["container_name"],
+                    "container_name": container_name,
+                    "subdomain": subdomain,
                     "port": port,
-                    "url": url,
+                    "url": primary_url,
+                    "lan_url": lan_url,
+                    "external_url": external_url,
                     "reachable": reachable,
                     "status_text": status_text,
                 }
             )
-    return {"nas_ip": req.nas_ip, "results": results}
+    return {
+        "nas_ip": req.nas_ip,
+        "base_domain": base_domain,
+        "link_mode": "external" if use_external else "lan",
+        "results": results,
+    }
 
 
 if STATIC_DIR.exists():
