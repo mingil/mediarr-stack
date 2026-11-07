@@ -114,7 +114,7 @@ def provision_qbittorrent_categories_and_conf(docker_root: Path, puid: int = 102
     if "BitTorrent" not in parser:
         parser["BitTorrent"] = {}
     bt = parser["BitTorrent"]
-    bt.setdefault(r"Session\DefaultSavePath", "/data/torrents")
+    bt[r"Session\DefaultSavePath"] = "/data/torrents"
 
     with open(conf_file, "w", encoding="utf-8") as f:
         parser.write(f, space_around_delimiters=False)
@@ -233,14 +233,15 @@ def provision_seerr_settings(
     seerr_dir = docker_root / "seerr"
     seerr_dir.mkdir(parents=True, exist_ok=True)
     _safe_chown_chmod(seerr_dir, puid, pgid, is_dir=True)
-    src_patch = Path(__file__).resolve().parent / "resources/apply-patches.js"
-    if src_patch.exists():
-        try:
-            dst_patch = seerr_dir / "apply-patches.js"
-            shutil.copy2(src_patch, dst_patch)
-            _safe_chown_chmod(dst_patch, puid, pgid, is_dir=False)
-        except Exception:
-            pass
+    for res_js in ("apply-patches.js", "seerr-turbo.js"):
+        src_patch = Path(__file__).resolve().parent / f"resources/{res_js}"
+        if src_patch.exists():
+            try:
+                dst_patch = seerr_dir / res_js
+                shutil.copy2(src_patch, dst_patch)
+                _safe_chown_chmod(dst_patch, puid, pgid, is_dir=False)
+            except Exception:
+                pass
     settings_file = seerr_dir / "settings.json"
 
     data: Dict[str, Any] = {}

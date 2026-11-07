@@ -405,11 +405,6 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             "      - no-new-privileges:true",
             "    ports:",
             '      - "5055:5055/tcp"',
-            *(
-                ['    command: ["sh", "-c", "node /app/config/apply-patches.js || true; exec node dist/index.js"]']
-                if cfg.seerr_variant != "overseerr"
-                else []
-            ),
             "    volumes:",
             seerr_vol,
             "    environment:",
@@ -418,6 +413,11 @@ def generate_mediarr_compose(cfg: MediarrStackConfigRequest) -> str:
             f"      PGID: ${{PGID:-{cfg.pgid}}}",
             "      LOG_LEVEL: info",
             "      PORT: 5055",
+            *(
+                ['      NODE_OPTIONS: "--require /app/config/seerr-turbo.js"']
+                if cfg.seerr_variant != "overseerr"
+                else []
+            ),
             "    healthcheck:",
             '      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5055/api/v1/status >/dev/null 2>&1 || nc -z 127.0.0.1 5055 >/dev/null 2>&1 || exit 1"]',
             "      interval: 30s",
