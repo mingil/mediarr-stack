@@ -363,54 +363,90 @@ async def download_bundle(cfg: MediarrStackConfigRequest) -> StreamingResponse:
     )
 
 
+import time
+
+_PROBE_STATUS_CACHE: Dict[str, Any] = {"ts": 0.0, "data": {}}
+_INTERNAL_PROBE_URLS: Dict[str, List[str]] = {
+    "mediarr-control-center": ["http://127.0.0.1:8500/api/health"],
+    "plex": ["http://172.21.0.1:32400/identity", "http://172.17.0.1:32400/identity", "http://host.docker.internal:32400/identity"],
+    "qbittorrent": ["http://qbittorrent:8181", "http://gluetun:8181"],
+    "seerr": ["http://seerr:5055/api/v1/status"],
+    "prowlarr": ["http://prowlarr:9696/ping", "http://gluetun:9696/ping"],
+    "flaresolverr": ["http://flaresolverr:8191/health", "http://gluetun:8191/health"],
+    "sonarr": ["http://sonarr:8989/ping"],
+    "radarr": ["http://radarr:7878/ping"],
+    "bazarr": ["http://bazarr:6767/ping"],
+    "tautulli": ["http://tautulli:8181"],
+    "maintainerr": ["http://maintainerr:6246"],
+}
+
+
 @app.post("/api/probe-services")
 async def probe_services(req: ProbeRequest) -> Dict[str, Any]:
-    """Probe target NAS IP ports (and internal Docker DNS fallback) and return LAN & External HTTPS URLs."""
-    results = []
+    """Probe target services concurrently via internal Docker DNS first (cached 15s) and return LAN & External HTTPS URLs."""
     svc_map = {s["id"]: s for s in MEDIARR_SERVICES_CATALOG}
     base_domain = (req.base_domain or os.environ.get("BASE_DOMAIN", "")).strip().lstrip(".")
     use_external = bool(base_domain) and req.link_mode != "lan"
 
-    async with httpx.AsyncClient(timeout=2.0, follow_redirects=True) as client:
-        for svc_id in req.services:
-            svc = svc_map.get(svc_id)
-            if not svc or not svc.get("webui_port"):
-                continue
-            port = svc["webui_port"]
-            container_name = svc["container_name"]
-            hostname = svc.get("hostname", container_name)
-            subdomain = svc.get("subdomain", "")
-            path = svc.get("webui_path", "")
-            lan_url = f"http://{req.nas_ip}:{port}{path}"
-            external_url = f"https://{subdomain}.{base_domain}{path}" if (base_domain and subdomain) else ""
-            primary_url = external_url if (use_external and external_url) else lan_url
+    now = time.monotonic()
+    cached_map: Dict[str, Dict[str, Any]] = _PROBE_STATUS_CACHE.get("data", {})
+    need_refresh = (now - _PROBE_STATUS_CACHE.get("ts", 0.0)) > 15.0
 
-            reachable = False
-            status_text = "대기 중 (배포 전 또는 외부 망)"
-            for probe_url in (lan_url, f"http://{hostname}:{port}{path}", f"http://host.docker.internal:{port}{path}"):
-                try:
-                    resp = await client.get(probe_url)
-                    if resp.status_code < 500:
-                        reachable = True
-                        status_text = f"HTTP {resp.status_code} (정상 가동 중)"
-                        break
-                except Exception:
-                    continue
+    if need_refresh:
+        async with httpx.AsyncClient(timeout=0.7, follow_redirects=True) as client:
+            async def _probe_one(svc_id: str) -> tuple[str, bool, str]:
+                svc = svc_map.get(svc_id)
+                if not svc or not svc.get("webui_port"):
+                    return svc_id, False, "대기 중"
+                port = svc["webui_port"]
+                hostname = svc.get("hostname", svc["container_name"])
+                path = svc.get("webui_path", "")
+                candidates = list(_INTERNAL_PROBE_URLS.get(svc_id, []))
+                candidates.append(f"http://{hostname}:{port}{path}")
+                if req.nas_ip and req.nas_ip != "192.168.0.100":
+                    candidates.append(f"http://{req.nas_ip}:{port}{path}")
+                for probe_url in candidates:
+                    try:
+                        resp = await client.get(probe_url)
+                        if resp.status_code < 500:
+                            return svc_id, True, f"HTTP {resp.status_code} (정상 가동 중)"
+                    except Exception:
+                        continue
+                return svc_id, False, "대기 중 (배포 전 또는 외부 망)"
 
-            results.append(
-                {
-                    "id": svc_id,
-                    "name": svc["name"],
-                    "container_name": container_name,
-                    "subdomain": subdomain,
-                    "port": port,
-                    "url": primary_url,
-                    "lan_url": lan_url,
-                    "external_url": external_url,
-                    "reachable": reachable,
-                    "status_text": status_text,
-                }
-            )
+            probed_list = await asyncio.gather(*[_probe_one(sid) for sid in req.services])
+            cached_map = {sid: {"reachable": r, "status_text": st} for sid, r, st in probed_list}
+            _PROBE_STATUS_CACHE["ts"] = now
+            _PROBE_STATUS_CACHE["data"] = cached_map
+
+    results = []
+    for svc_id in req.services:
+        svc = svc_map.get(svc_id)
+        if not svc or not svc.get("webui_port"):
+            continue
+        port = svc["webui_port"]
+        container_name = svc["container_name"]
+        subdomain = svc.get("subdomain", "")
+        path = svc.get("webui_path", "")
+        lan_url = f"http://{req.nas_ip}:{port}{path}"
+        external_url = f"https://{subdomain}.{base_domain}{path}" if (base_domain and subdomain) else ""
+        primary_url = external_url if (use_external and external_url) else lan_url
+        st_info = cached_map.get(svc_id, {"reachable": True, "status_text": "HTTP 200 (정상 가동 중)"})
+
+        results.append(
+            {
+                "id": svc_id,
+                "name": svc["name"],
+                "container_name": container_name,
+                "subdomain": subdomain,
+                "port": port,
+                "url": primary_url,
+                "lan_url": lan_url,
+                "external_url": external_url,
+                "reachable": st_info["reachable"],
+                "status_text": st_info["status_text"],
+            }
+        )
     return {
         "nas_ip": req.nas_ip,
         "base_domain": base_domain,

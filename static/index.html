@@ -292,6 +292,43 @@
     let selectedServices = [];
     let linkMode = 'external'; // 'external' or 'lan'
 
+    const QUICK_SERVICES_SEED = [
+      { id: 'mediarr-control-center', name: 'Mediarr Control Center', subdomain: 'mediarr', webui_port: 8585, webui_path: '/' },
+      { id: 'plex', name: 'Plex Media Server (HW)', subdomain: 'plex', webui_port: 32400, webui_path: '/web' },
+      { id: 'qbittorrent', name: 'qBittorrent', subdomain: 'qbittorrent', webui_port: 8181, webui_path: '' },
+      { id: 'seerr', name: 'Seerr (Media Requests)', subdomain: 'seerr', webui_port: 5055, webui_path: '' },
+      { id: 'prowlarr', name: 'Prowlarr', subdomain: 'prowlarr', webui_port: 9696, webui_path: '' },
+      { id: 'sonarr', name: 'Sonarr', subdomain: 'sonarr', webui_port: 8989, webui_path: '' },
+      { id: 'radarr', name: 'Radarr', subdomain: 'radarr', webui_port: 7878, webui_path: '' },
+      { id: 'bazarr', name: 'Bazarr', subdomain: 'bazarr', webui_port: 6767, webui_path: '' },
+      { id: 'tautulli', name: 'Tautulli', subdomain: 'tautulli', webui_port: 8182, webui_path: '' },
+      { id: 'maintainerr', name: 'Maintainerr', subdomain: 'maintainerr', webui_port: 6246, webui_path: '' }
+    ];
+
+    function renderInstantQuickLaunch(statusMap = {}) {
+      const topGrid = document.getElementById('topQuickLaunchGrid');
+      if (!topGrid) return;
+      const list = (catalogData && catalogData.services)
+        ? catalogData.services.filter(s => s.webui_port && s.id !== 'flaresolverr')
+        : QUICK_SERVICES_SEED;
+      topGrid.innerHTML = list.map(s => {
+        const url = getServiceUrl(s);
+        const st = statusMap[s.id];
+        const reachable = st ? st.reachable : true;
+        const statusText = st ? st.status_text : '⚡ 즉시 연결 가능';
+        return `
+          <a href="${url}" target="_blank" class="p-3 rounded-xl bg-slate-900/95 border ${reachable ? 'border-cyan-500/40' : 'border-slate-800'} hover:border-cyan-400 hover:bg-slate-800/80 transition block group">
+            <div class="flex items-center justify-between gap-1">
+              <span class="text-xs font-bold text-white group-hover:text-cyan-300 truncate">${s.name}</span>
+              <span class="text-[10px] text-cyan-400 shrink-0">↗</span>
+            </div>
+            <div class="text-[10px] font-mono text-cyan-300/90 mt-1 truncate">${url.replace(/^https?:\/\//, '')}</div>
+            <div class="text-[10px] text-emerald-400/90 mt-0.5 truncate">${statusText}</div>
+          </a>
+        `;
+      }).join('');
+    }
+
     function detectBaseDomain(defaultFromServer) {
       const host = (window.location.hostname || '').trim();
       const isIpOrLocal = !host || host === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(host);
@@ -315,6 +352,7 @@
         btnLan.className = 'px-3 py-1.5 rounded-lg text-xs font-bold transition bg-indigo-600 text-white';
         btnExt.className = 'px-3 py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white';
       }
+      renderInstantQuickLaunch();
       if (catalogData) renderCatalog(catalogData.services);
       if (generatedData && generatedData.wiring_guide) renderWiring(generatedData.wiring_guide);
       probeNasServices();
@@ -334,6 +372,18 @@
     }
 
     async function initApp() {
+      // 1. Immediately detect domain from browser URL and render all quick-launch buttons in 0ms
+      const initialDomain = detectBaseDomain('');
+      if (initialDomain) {
+        document.getElementById('cfgBaseDomain').value = initialDomain;
+        linkMode = 'external';
+      } else {
+        linkMode = 'lan';
+      }
+      renderInstantQuickLaunch();
+      probeNasServices();
+
+      // 2. Fetch catalog and diagnosis in background
       const [catRes, diagRes] = await Promise.all([
         fetch('/api/catalog').then(r => r.json()),
         fetch('/api/diagnosis').then(r => r.json()),
@@ -353,7 +403,7 @@
       renderDiagnosis(diagRes);
       renderPipelines(catRes.organic_pipelines);
       setLinkMode(linkMode);
-      await regenerateCompose();
+      regenerateCompose();
     }
 
     function switchTab(tabId) {
