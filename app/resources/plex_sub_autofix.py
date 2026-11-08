@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -73,9 +74,11 @@ def refresh_and_select_korean_in_plex(directory: str) -> None:
             sec_key = sec.attrib.get("key")
             sec_type = sec.attrib.get("type")
             locs = [loc.attrib.get("path", "") for loc in sec.findall(".//Location")]
-            if sec_type in ("movie", "show") and any("/data/media" in p for p in locs):
+            # 2026-11-08: 자막이 생긴 폴더가 속한 라이브러리만, 그 폴더만 부분 스캔 (예전: /data/media 라이브러리 3개 전체를 매번 스캔)
+            if sec_type in ("movie", "show") and directory and any(directory.startswith(p.rstrip("/") + "/") for p in locs if p):
                 target_sections.append((sec_key, sec_type))
-                urllib.request.urlopen(f"{PLEX_URL}/library/sections/{sec_key}/refresh?X-Plex-Token={PLEX_TOKEN}", timeout=10)
+                q = urllib.parse.quote(directory.rstrip("/"))
+                urllib.request.urlopen(f"{PLEX_URL}/library/sections/{sec_key}/refresh?path={q}&X-Plex-Token={PLEX_TOKEN}", timeout=10)
 
         time.sleep(2)
         clean_dir = directory.rstrip("/") if directory else ""
