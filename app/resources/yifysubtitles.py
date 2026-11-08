@@ -25,7 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 try:
     from subzero.language import Language
-    from subliminal.subtitle import SUBTITLE_EXTENSIONS, Subtitle, fix_line_ending
+    from subliminal.subtitle import SUBTITLE_EXTENSIONS, fix_line_ending
+    from subliminal_patch.subtitle import Subtitle  # 2026-11-08: subliminal_patch 판 Subtitle 사용 (hash_verifiable 등 필수 속성 포함 — Bazarr 업데이트 후 점수 계산 오류 수정)
     from subliminal.video import Episode, Movie
     from subliminal_patch.providers import Provider
     from subliminal_patch.subtitle import guess_matches
