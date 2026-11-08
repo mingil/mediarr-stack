@@ -308,12 +308,15 @@ Module._load = function (request, parent, isMain) {
       const origMiddleware = origValidator.middleware;
       origValidator.middleware = function (options) {
         const mw = origMiddleware.call(this, options);
-        return function (req, res, next) {
+        // 2026-11-08 수정: middleware()는 함수 하나가 아니라 "함수 배열"을 반환한다.
+        // 예전 코드는 배열을 함수처럼 호출해 모든 POST/PUT/DELETE(요청 제출·로그인·설정 저장)가 500 오류로 실패했다.
+        const skipGet = (fn) => function (req, res, next) {
           if (req.method === "GET" || req.method === "HEAD") {
             return next();
           }
-          return mw(req, res, next);
+          return fn(req, res, next);
         };
+        return Array.isArray(mw) ? mw.map(skipGet) : skipGet(mw);
       };
     }
     return origValidator;
